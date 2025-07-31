@@ -15,7 +15,7 @@
 
 # These are the object files needed to rebuild the main executable file
 #
-OBJS = support.cmo syntax.cmo core.cmo parser.cmo lexer.cmo main.cmo
+OBJS = support.cmo syntax.cmo core.cmo parser.cmo lexer.cmo 
 
 # Files that need to be generated from other files
 DEPEND += lexer.ml parser.ml 
@@ -34,13 +34,20 @@ include .depend
 # Build an executable typechecker
 f: $(OBJS) main.cmo 
 	@echo Linking $@
-	ocamlc -o $@ $(COMMONOBJS) $(OBJS) 
+	ocamlc -o $@ $(COMMONOBJS) $(OBJS) main.cmo
 
 # Build an executable typechecker for Windows
 f.exe: $(OBJS) main.cmo 
 	@echo Linking $@
-	ocamlc -o $@ $(COMMONOBJS) $(OBJS) 
+	ocamlc -o $@ $(COMMONOBJS) $(OBJS) main.cmo
 
+repl: $(OBJS) repl.cmo
+	@echo Linking $@
+	ocamlc -o $@ $(COMMONOBJS) $(OBJS) repl.cmo
+
+
+format:
+	@find . -maxdepth 1 -name "*.ml" ! -name "lexer.ml" ! -name "parser.ml" -print0 | xargs -0 ocamlformat --inplace
 # Build and test
 test: all
 	./f test.f
@@ -68,7 +75,7 @@ parser.ml parser.mli: parser.mly
 # Clean up the directory
 clean::
 	rm -rf lexer.ml parser.ml parser.mli *.o *.cmo *.cmi parser.output \
-	   f f.exe TAGS *~ *.bak
+	   f f.exe repl TAGS *~ *.bak
 
 # Rebuild intermodule dependencies
 depend:: $(DEPEND) 
