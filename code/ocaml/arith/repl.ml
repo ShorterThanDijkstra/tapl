@@ -6,7 +6,9 @@ open Core
 
 let process_input input =
   try
-    let input' = if String.ends_with ~suffix:";" input then input else input ^ ";" in 
+    let input' =
+      if String.ends_with ~suffix:";" input then input else input ^ ";"
+    in
     let lexbuf = Lexing.from_string input' in
     let cmds = Parser.toplevel Lexer.main lexbuf in
     let f = fun cmd -> match cmd with Eval (fi, t) -> true | _ -> false in

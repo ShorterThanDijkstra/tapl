@@ -1,0 +1,15 @@
+name = "untyped"
+version = "0.1.0"
+defaultTargets = ["untyped"]
+
+[[lean_lib]]
+name = "Parser"
+
+[[lean_lib]]
+name = "Eval"
+
+[[lean_exe]]
+name = "untyped"
+root = "Main"
+
+
