@@ -20,7 +20,7 @@ instance : ToString (Term α) where
       | Term.Lam _ tag body =>
           s!"(λ{tag}. {go body})"
       | Term.App _ f arg =>
-          s!"{go f} {go arg}"
+          s!"({go f} {go arg})"
     s! "\"{go t}\""
 
 def Err := Term.Var () "error"
@@ -70,17 +70,26 @@ partial def lamParser (a : α) : Parser (Term α) := do
        pure <| Term.Lam a bind body
  -/
 partial def appParser (a : α) : Parser (Term α) := do
+  _ <- whitespace
   _ <- char '('
   let t1 <- termParser a
+  _ <- whitespace
   let t2 <- termParser a
   _ <- char ')'
   pure <| Term.App a t1 t2
+end
 
 partial def parse (a : α) : Parser (Term α) := do
+  _ <- whitespace
   let t <- termParser a
   _ <- eof
   pure t
-end
+
+partial def parseD(s : String) : Term Unit :=
+  match (Syntax.parse ()).run s with
+  | Except.error _ => Syntax.Err
+  | Except.ok (t, _) => t
+
 
 #eval (Syntax.parse ()).run "x"
 
@@ -90,5 +99,12 @@ end
 
 #eval ((Syntax.parse ()).run "((lambda x.x) (lambda x.x))")
 
-#eval (Syntax.parse ()).run  "((lambda x . x x) (lambda y . y))"
+#eval (Syntax.parse ()).run  "((lambda x . (x x)) (lambda y . y))"
+
+#eval (Syntax.parse ()).run "((x y) z)"
+
+#eval (Syntax.appParser ()).run "(x (y z))"
+
+#eval (Syntax.appParser ()).run "  (y z))"
+
 end Syntax

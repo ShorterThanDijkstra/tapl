@@ -1,0 +1,613 @@
+   0  $accept : %entry% $end
+
+   1  toplevel : EOF
+   2           | Command SEMI toplevel
+
+   3  Command : IMPORT STRINGV
+   4          | Term
+   5          | LCID Binder
+
+   6  Binder : COLON Type
+
+   7  Type : ArrowType
+
+   8  AType : LPAREN Type RPAREN
+   9        | BOOL
+
+  10  ArrowType : AType ARROW ArrowType
+  11            | AType
+
+  12  Term : AppTerm
+  13       | LET LCID EQ Term IN Term
+  14       | LET USCORE EQ Term IN Term
+  15       | IF Term THEN Term ELSE Term
+  16       | LAMBDA LCID COLON Type DOT Term
+  17       | LAMBDA USCORE COLON Type DOT Term
+
+  18  AppTerm : ATerm
+  19          | AppTerm ATerm
+
+  20  ATerm : LPAREN Term RPAREN
+  21        | LCID
+  22        | TRUE
+  23        | FALSE
+
+  24  %entry% : '\001' toplevel
+
+state 0
+	$accept : . %entry% $end  (0)
+
+	'\001'  shift 1
+	.  error
+
+	%entry%  goto 2
+
+
+state 1
+	%entry% : '\001' . toplevel  (24)
+
+	IMPORT  shift 3
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 9
+	EOF  shift 10
+	LPAREN  shift 11
+	.  error
+
+	toplevel  goto 12
+	Command  goto 13
+	Term  goto 14
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 2
+	$accept : %entry% . $end  (0)
+
+	$end  accept
+
+
+state 3
+	Command : IMPORT . STRINGV  (3)
+
+	STRINGV  shift 17
+	.  error
+
+
+state 4
+	Term : LET . LCID EQ Term IN Term  (13)
+	Term : LET . USCORE EQ Term IN Term  (14)
+
+	LCID  shift 18
+	USCORE  shift 19
+	.  error
+
+
+state 5
+	Term : IF . Term THEN Term ELSE Term  (15)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 21
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 6
+	ATerm : TRUE .  (22)
+
+	.  reduce 22
+
+
+state 7
+	ATerm : FALSE .  (23)
+
+	.  reduce 23
+
+
+state 8
+	Term : LAMBDA . LCID COLON Type DOT Term  (16)
+	Term : LAMBDA . USCORE COLON Type DOT Term  (17)
+
+	LCID  shift 22
+	USCORE  shift 23
+	.  error
+
+
+state 9
+	Command : LCID . Binder  (5)
+	ATerm : LCID .  (21)
+
+	COLON  shift 24
+	TRUE  reduce 21
+	FALSE  reduce 21
+	LCID  reduce 21
+	LPAREN  reduce 21
+	SEMI  reduce 21
+
+	Binder  goto 25
+
+
+state 10
+	toplevel : EOF .  (1)
+
+	.  reduce 1
+
+
+state 11
+	ATerm : LPAREN . Term RPAREN  (20)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 26
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 12
+	%entry% : '\001' toplevel .  (24)
+
+	.  reduce 24
+
+
+state 13
+	toplevel : Command . SEMI toplevel  (2)
+
+	SEMI  shift 27
+	.  error
+
+
+state 14
+	Command : Term .  (4)
+
+	.  reduce 4
+
+
+state 15
+	Term : AppTerm .  (12)
+	AppTerm : AppTerm . ATerm  (19)
+
+	TRUE  shift 6
+	FALSE  shift 7
+	LCID  shift 20
+	LPAREN  shift 11
+	IN  reduce 12
+	THEN  reduce 12
+	ELSE  reduce 12
+	RPAREN  reduce 12
+	SEMI  reduce 12
+
+	ATerm  goto 28
+
+
+state 16
+	AppTerm : ATerm .  (18)
+
+	.  reduce 18
+
+
+state 17
+	Command : IMPORT STRINGV .  (3)
+
+	.  reduce 3
+
+
+state 18
+	Term : LET LCID . EQ Term IN Term  (13)
+
+	EQ  shift 29
+	.  error
+
+
+state 19
+	Term : LET USCORE . EQ Term IN Term  (14)
+
+	EQ  shift 30
+	.  error
+
+
+state 20
+	ATerm : LCID .  (21)
+
+	.  reduce 21
+
+
+state 21
+	Term : IF Term . THEN Term ELSE Term  (15)
+
+	THEN  shift 31
+	.  error
+
+
+state 22
+	Term : LAMBDA LCID . COLON Type DOT Term  (16)
+
+	COLON  shift 32
+	.  error
+
+
+state 23
+	Term : LAMBDA USCORE . COLON Type DOT Term  (17)
+
+	COLON  shift 33
+	.  error
+
+
+state 24
+	Binder : COLON . Type  (6)
+
+	BOOL  shift 34
+	LPAREN  shift 35
+	.  error
+
+	Type  goto 36
+	ArrowType  goto 37
+	AType  goto 38
+
+
+state 25
+	Command : LCID Binder .  (5)
+
+	.  reduce 5
+
+
+state 26
+	ATerm : LPAREN Term . RPAREN  (20)
+
+	RPAREN  shift 39
+	.  error
+
+
+state 27
+	toplevel : Command SEMI . toplevel  (2)
+
+	IMPORT  shift 3
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 9
+	EOF  shift 10
+	LPAREN  shift 11
+	.  error
+
+	toplevel  goto 40
+	Command  goto 13
+	Term  goto 14
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 28
+	AppTerm : AppTerm ATerm .  (19)
+
+	.  reduce 19
+
+
+state 29
+	Term : LET LCID EQ . Term IN Term  (13)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 41
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 30
+	Term : LET USCORE EQ . Term IN Term  (14)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 42
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 31
+	Term : IF Term THEN . Term ELSE Term  (15)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 43
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 32
+	Term : LAMBDA LCID COLON . Type DOT Term  (16)
+
+	BOOL  shift 34
+	LPAREN  shift 35
+	.  error
+
+	Type  goto 44
+	ArrowType  goto 37
+	AType  goto 38
+
+
+state 33
+	Term : LAMBDA USCORE COLON . Type DOT Term  (17)
+
+	BOOL  shift 34
+	LPAREN  shift 35
+	.  error
+
+	Type  goto 45
+	ArrowType  goto 37
+	AType  goto 38
+
+
+state 34
+	AType : BOOL .  (9)
+
+	.  reduce 9
+
+
+state 35
+	AType : LPAREN . Type RPAREN  (8)
+
+	BOOL  shift 34
+	LPAREN  shift 35
+	.  error
+
+	Type  goto 46
+	ArrowType  goto 37
+	AType  goto 38
+
+
+state 36
+	Binder : COLON Type .  (6)
+
+	.  reduce 6
+
+
+state 37
+	Type : ArrowType .  (7)
+
+	.  reduce 7
+
+
+state 38
+	ArrowType : AType . ARROW ArrowType  (10)
+	ArrowType : AType .  (11)
+
+	ARROW  shift 47
+	DOT  reduce 11
+	RPAREN  reduce 11
+	SEMI  reduce 11
+
+
+state 39
+	ATerm : LPAREN Term RPAREN .  (20)
+
+	.  reduce 20
+
+
+state 40
+	toplevel : Command SEMI toplevel .  (2)
+
+	.  reduce 2
+
+
+state 41
+	Term : LET LCID EQ Term . IN Term  (13)
+
+	IN  shift 48
+	.  error
+
+
+state 42
+	Term : LET USCORE EQ Term . IN Term  (14)
+
+	IN  shift 49
+	.  error
+
+
+state 43
+	Term : IF Term THEN Term . ELSE Term  (15)
+
+	ELSE  shift 50
+	.  error
+
+
+state 44
+	Term : LAMBDA LCID COLON Type . DOT Term  (16)
+
+	DOT  shift 51
+	.  error
+
+
+state 45
+	Term : LAMBDA USCORE COLON Type . DOT Term  (17)
+
+	DOT  shift 52
+	.  error
+
+
+state 46
+	AType : LPAREN Type . RPAREN  (8)
+
+	RPAREN  shift 53
+	.  error
+
+
+state 47
+	ArrowType : AType ARROW . ArrowType  (10)
+
+	BOOL  shift 34
+	LPAREN  shift 35
+	.  error
+
+	ArrowType  goto 54
+	AType  goto 38
+
+
+state 48
+	Term : LET LCID EQ Term IN . Term  (13)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 55
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 49
+	Term : LET USCORE EQ Term IN . Term  (14)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 56
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 50
+	Term : IF Term THEN Term ELSE . Term  (15)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 57
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 51
+	Term : LAMBDA LCID COLON Type DOT . Term  (16)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 58
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 52
+	Term : LAMBDA USCORE COLON Type DOT . Term  (17)
+
+	LET  shift 4
+	IF  shift 5
+	TRUE  shift 6
+	FALSE  shift 7
+	LAMBDA  shift 8
+	LCID  shift 20
+	LPAREN  shift 11
+	.  error
+
+	Term  goto 59
+	AppTerm  goto 15
+	ATerm  goto 16
+
+
+state 53
+	AType : LPAREN Type RPAREN .  (8)
+
+	.  reduce 8
+
+
+state 54
+	ArrowType : AType ARROW ArrowType .  (10)
+
+	.  reduce 10
+
+
+state 55
+	Term : LET LCID EQ Term IN Term .  (13)
+
+	.  reduce 13
+
+
+state 56
+	Term : LET USCORE EQ Term IN Term .  (14)
+
+	.  reduce 14
+
+
+state 57
+	Term : IF Term THEN Term ELSE Term .  (15)
+
+	.  reduce 15
+
+
+state 58
+	Term : LAMBDA LCID COLON Type DOT Term .  (16)
+
+	.  reduce 16
+
+
+state 59
+	Term : LAMBDA USCORE COLON Type DOT Term .  (17)
+
+	.  reduce 17
+
+
+55 terminals, 11 nonterminals
+25 grammar rules, 60 states

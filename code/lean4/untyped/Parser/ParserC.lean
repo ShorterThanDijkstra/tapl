@@ -1,15 +1,15 @@
 namespace ParserC
 structure Parser (α : Type) where
-  run : String → Option (α × String)
+  run : String → Except String (α × String)
 
 def Parser.pure {α : Type} (a : α) : Parser α :=
-  ⟨fun input => some (a, input)⟩
+  ⟨fun input => Except.ok (a, input)⟩
 
 def Parser.bind {α β : Type} (p : Parser α) (f : α → Parser β) : Parser β :=
   ⟨fun input =>
     match p.run input with
-    | some (a, rest) => (f a).run rest
-    | none => none⟩
+    | Except.ok (a, rest) => (f a).run rest
+    | Except.error s => Except.error s⟩
 
 instance : Monad Parser where
   pure := Parser.pure
@@ -25,11 +25,11 @@ instance : Functor Parser where
 def Parser.orElse  {α : Type}  (p1 : Parser α)  (p2 : Unit-> Parser α) : Parser α :=
   ⟨fun input =>
     match p1.run input with
-      | a@(some _) => a
-      | none => (p2 ()).run input⟩
+      | a@(Except.ok _) => a
+      | Except.error _ => (p2 ()).run input⟩
 
 instance : Alternative Parser where
-  failure := ⟨fun _ => none⟩
+  failure := ⟨fun input => Except.error input⟩
   orElse := Parser.orElse
 
 def Parser.seq {α β : Type} (pf : Parser (α → β)) (pa : Unit -> Parser α) : Parser β := do
@@ -43,8 +43,8 @@ instance : Applicative Parser where
 def item : Parser Char :=
   ⟨fun input =>
     match input.data with
-    | []      => none
-    | c :: cs => some (c, String.mk cs)⟩
+    | []      => Except.error input
+    | c :: cs => Except.ok (c, String.mk cs)⟩
 
 def sat (pred : Char → Bool) : Parser Char := do
   let c <- item
@@ -53,15 +53,18 @@ def sat (pred : Char → Bool) : Parser Char := do
   else failure
 
 def peek (ahead : Nat) : Parser String :=
-  ⟨fun input => some (input.take ahead, input)⟩
+  ⟨fun input => Except.ok (input.take ahead, input)⟩
+
+def get : Parser String :=
+  ⟨fun input => Except.ok (input, input)⟩
 
 def peakWith (f: String->Bool) : Parser Bool :=
-  ⟨fun input => some (f input, input)⟩
+  ⟨fun input => Except.ok (f input, input)⟩
 
 def option {α : Type} (p : Parser α) : Parser Bool :=
   ⟨fun input => match p.run input with
-                | none => some (false, input)
-                | some (_, rest) => some (true, rest)⟩
+                | Except.error _ => Except.ok (false, input)
+                | Except.ok (_, rest) => Except.ok (true, rest)⟩
 
 def char (c : Char) : Parser Char :=
   sat (· == c)
@@ -92,8 +95,8 @@ partial def sepBy1 {α β : Type} (p : Parser α) (sep : Parser β) : Parser (Li
 
 def eof : Parser Unit :=
   ⟨fun input => if input.isEmpty
-                then some ((), "")
-                else none⟩
+                then Except.ok ((), "")
+                else Except.error input⟩
 
 def digit : Parser Char := sat Char.isDigit
 
@@ -107,14 +110,14 @@ def isAlphaNum (c : Char) : Bool :=
 
 def string (pat : String) : Parser String :=
   ⟨fun input => if input.startsWith pat
-                then some (pat, input.drop pat.length)
-                else none⟩
+                then Except.ok (pat, input.drop pat.length)
+                else Except.error input⟩
 
 def notFollowedBy (p : Parser α) : Parser Unit :=
   ⟨fun input =>
     match p.run input with
-    | some _ => none
-    | none   => some ((), input)⟩
+    | Except.ok _ => Except.error input
+    | Except.error _ => Except.ok ((), input)⟩
 
 def keyword (kw : String) : Parser String :=
   string kw <* notFollowedBy (sat isAlphaNum)
@@ -138,6 +141,5 @@ def identifier (keywords : List String) : Parser String :=
     if keywords.elem ident
     then failure
     else pure ident
-
 
 end ParserC
