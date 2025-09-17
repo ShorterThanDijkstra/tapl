@@ -1,14 +1,32 @@
+use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Identifier(String),
     // BooleanLiteral(bool),
-    Colon,      // :
-    Arrow,      // ->
-    Equals,     // =
-    Lambda,     // λ
-    LeftParen,  // (
-    RightParen, // )
+    Colon,            // :
+    RightArrow,       // ->
+    Equals,           // =
+    Lambda,           // λ | \
+    LeftParen,        // (
+    RightParen,       // )
+    RightArrowDouble, // =>
     EOF,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identifier(str) => write!(f, "{}", str),
+            Self::Colon => write!(f, ":"),
+            Self::RightArrow => write!(f, "->"),
+            Self::Equals => write!(f, "="),
+            Self::Lambda => write!(f, "λ"),
+            Self::LeftParen => write!(f, "("),
+            Self::RightParen => write!(f, ")"),
+            Self::RightArrowDouble => write!(f, "=>"),
+            Self::EOF => write!(f, "EOF"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -118,7 +136,7 @@ impl Lexer {
                         }
                         Some('>') => {
                             self.advance_many(2);
-                            return Ok(Token::Arrow);
+                            return Ok(Token::RightArrow);
                         }
                         Some(other) => {
                             return Err(LexerError::UnexpectedChar {
@@ -134,15 +152,38 @@ impl Lexer {
                         }
                     }
                 }
+                Some('=') => {
+                    let next_pos = self.position + 1;
+                    match self.input.get(next_pos) {
+                        Some('>') => {
+                            self.advance_many(2);
+                            return Ok(Token::RightArrowDouble);
+                        }
+                        Some(' ') => {
+                            self.advance();
+                            return Ok(Token::Equals);
+                        }
+
+                        Some(other) => {
+                            return Err(LexerError::UnexpectedChar {
+                                expected: vec![' ', '>'],
+                                found: *other,
+                            });
+                        }
+                        None => {
+                            return Err(LexerError::UnexpectedChar {
+                                expected: vec!['-', '>'],
+                                found: '\0',
+                            });
+                        }
+                    }
+                }
                 Some(':') => {
                     self.advance();
                     return Ok(Token::Colon);
                 }
-                Some('=') => {
-                    self.advance();
-                    return Ok(Token::Equals);
-                }
-                Some('λ') => {
+
+                Some('\\') | Some('λ') => {
                     self.advance();
                     return Ok(Token::Lambda);
                 }
@@ -207,7 +248,7 @@ mod tests {
             ("λ", Token::Lambda),
             ("(", Token::LeftParen),
             (")", Token::RightParen),
-            ("->", Token::Arrow),
+            ("->", Token::RightArrow),
         ];
 
         for (input, expected) in test_cases {
@@ -244,7 +285,7 @@ mod tests {
     }
 
     #[test]
-  /*   fn test_boolean_literals() {
+    /*   fn test_boolean_literals() {
         let mut lexer = Lexer::new("True");
         assert_eq!(lexer.next_token().unwrap(), Token::BooleanLiteral(true));
         assert_eq!(lexer.next_token().unwrap(), Token::EOF);
@@ -253,7 +294,6 @@ mod tests {
         assert_eq!(lexer.next_token().unwrap(), Token::BooleanLiteral(false));
         assert_eq!(lexer.next_token().unwrap(), Token::EOF);
     } */
-
     #[test]
     fn test_comments() {
         let mut lexer = Lexer::new("-- this is a comment\nx");
@@ -290,7 +330,7 @@ mod tests {
         let expected = vec![
             Token::Lambda,
             Token::Identifier("x".to_string()),
-            Token::Arrow,
+            Token::RightArrow,
             Token::Identifier("x".to_string()),
             Token::EOF,
         ];
@@ -307,13 +347,13 @@ mod tests {
             Token::Identifier("f".to_string()),
             Token::Colon,
             Token::Identifier("Bool".to_string()),
-            Token::Arrow,
+            Token::RightArrow,
             Token::Identifier("Bool".to_string()),
             Token::Identifier("f".to_string()),
             Token::Equals,
             Token::Lambda,
             Token::Identifier("x".to_string()),
-            Token::Arrow,
+            Token::RightArrow,
             Token::Identifier("x".to_string()),
             Token::EOF,
         ];
@@ -330,11 +370,11 @@ mod tests {
             Token::LeftParen,
             Token::Lambda,
             Token::Identifier("x".to_string()),
-            Token::Arrow,
+            Token::RightArrow,
             Token::LeftParen,
             Token::Lambda,
             Token::Identifier("y".to_string()),
-            Token::Arrow,
+            Token::RightArrow,
             Token::Identifier("x".to_string()),
             Token::RightParen,
             Token::RightParen,
@@ -370,7 +410,7 @@ mod tests {
             Token::Identifier("x".to_string()),
             Token::Colon,
             Token::Identifier("Bool".to_string()),
-            Token::Arrow,
+            Token::RightArrow,
             Token::Identifier("Bool".to_string()),
             Token::EOF,
         ];
@@ -415,7 +455,10 @@ mod tests {
                 assert_eq!(expected, vec!['-', '>']);
             }
             Err(LexerError::UnknownChar { found }) => {
-                panic!("Expected UnexpectedChar error, got UnknownChar({:?}) error", found)
+                panic!(
+                    "Expected UnexpectedChar error, got UnknownChar({:?}) error",
+                    found
+                )
             }
             Ok(token) => panic!("Expected error, got token: {:?}", token),
         }
@@ -430,7 +473,10 @@ mod tests {
             }
 
             Err(LexerError::UnknownChar { found }) => {
-                panic!("Expected UnexpectedChar error, got UnknownChar({:?}) error", found)
+                panic!(
+                    "Expected UnexpectedChar error, got UnknownChar({:?}) error",
+                    found
+                )
             }
             Ok(token) => panic!("Expected error, got token: {:?}", token),
         }
@@ -467,7 +513,7 @@ mod tests {
             Token::LeftParen,
             Token::RightParen,
             Token::Lambda,
-            Token::Arrow,
+            Token::RightArrow,
             Token::Colon,
             Token::EOF,
         ];
@@ -513,7 +559,7 @@ mod tests {
         assert!(tokens.contains(&Token::Identifier("id".to_string())));
         assert!(tokens.contains(&Token::Identifier("apply".to_string())));
         assert!(tokens.contains(&Token::Lambda));
-        assert!(tokens.contains(&Token::Arrow));
+        assert!(tokens.contains(&Token::RightArrow));
         assert!(tokens.contains(&Token::Colon));
         assert!(tokens.contains(&Token::Equals));
         assert_eq!(tokens.last(), Some(&Token::EOF));

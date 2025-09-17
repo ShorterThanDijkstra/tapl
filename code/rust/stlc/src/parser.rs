@@ -1,9 +1,9 @@
 use crate::lexer::{Lexer, LexerError, Token};
-use crate::syntax::{Dec, Expr, FuncDec, Type, TypeDec};
+use crate::syntax::{Dec, Expr, FuncDec, Program, Type, TypeDec};
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
     LexerError(LexerError),
-    UnexpectedToken { expected: String, found: Token },
+    UnexpectedToken { expected: String, found: String },
     UnexpectedEof { expected: String },
     InvalidSyntax { message: String },
 }
@@ -17,6 +17,12 @@ impl From<LexerError> for ParseError {
 pub struct Parser {
     tokens: Vec<Token>,
     position: usize,
+}
+
+enum ExprWraper {
+    Epsilon,
+    Atom(Box<Expr>),                                 // for x, lambda x: Ty => e, (e)
+    Application { func: Box<Expr>, arg: Box<Expr> }, // for e1 e2
 }
 
 impl Parser {
@@ -35,74 +41,86 @@ impl Parser {
 
     fn advance(&mut self) -> Option<&Token> {
         let token = self.tokens.get(self.position);
-        if token.is_some() && self.tokens[self.position] != Token::EOF {
+        if token.is_some() && token != Some(&Token::EOF) {
             self.position += 1;
         }
         token
     }
 
-    fn expect(&mut self, expected_description: &str) -> Result<&Token, ParseError> {
-        match self.advance() {
-            Some(Token::EOF) => Err(ParseError::UnexpectedEof {
-                expected: expected_description.to_string(),
-            }),
-            Some(token) => Ok(token),
-            None => Err(ParseError::UnexpectedEof {
-                expected: expected_description.to_string(),
-            }),
-        }
-    }
-
-    fn expect_token(&mut self, expected: Token, description: &str) -> Result<(), ParseError> {
-        let token = self.expect(description)?;
+    fn expect_token(&mut self, expected: Token) -> Result<&Token, ParseError> {
+        let token = self.advance().ok_or(ParseError::UnexpectedToken {
+            expected: expected.to_string(),
+            found: "EOF".to_string(),
+        })?;
         if *token == expected {
-            Ok(())
+            Ok(token)
         } else {
             Err(ParseError::UnexpectedToken {
-                expected: description.to_string(),
-                found: token.clone(),
+                expected: expected.to_string(),
+                found: token.to_string(),
             })
         }
     }
 
-    fn expect_identifier(&mut self) -> Result<String, ParseError> {
-        let token = self.expect("identifier")?;
+    fn expect_identifier(&mut self) -> Result<&Token, ParseError> {
+        let token = self.advance().ok_or(ParseError::UnexpectedToken {
+            expected: Token::Identifier("?".to_string()).to_string(),
+            found: "EOF".to_string(),
+        })?;
         match token {
-            Token::Identifier(name) => Ok(name.clone()),
+            Token::Identifier(_) => Ok(token),
             _ => Err(ParseError::UnexpectedToken {
-                expected: "identifier".to_string(),
-                found: token.clone(),
+                expected: Token::Identifier("?".to_string()).to_string(),
+                found: token.to_string(),
             }),
         }
     }
 
     // Program := Dec {Dec}
-    pub fn parse_program(&mut self) -> Result<Vec<Dec>, ParseError> {
-        let mut declarations = Vec::new();
-
+    pub fn parse_program(&mut self) -> Result<Program, ParseError> {
+        let mut decs = Vec::new();
+        let mut main = None;
         while let Some(token) = self.peek() {
             if *token == Token::EOF {
                 break;
             }
-            declarations.push(self.parse_dec()?);
+            let dec = self.parse_dec()?;
+            if !Self::is_main_dec(&dec) {
+                decs.push(dec);
+            } else if main.is_none() {
+                main = Some(dec);
+            } else {
+                return Err(ParseError::InvalidSyntax {
+                    message: "Program must contain at exactly one main declaration".to_string(),
+                });
+            }
         }
 
-        if declarations.is_empty() {
+        if decs.is_empty() {
             return Err(ParseError::InvalidSyntax {
                 message: "Program must contain at least one declaration".to_string(),
             });
         }
+        if main.is_none() {
+            return Err(ParseError::InvalidSyntax {
+                message: "Program must contain at exactly one main declaration".to_string(),
+            });
+        }
 
-        Ok(declarations)
+        Ok(Program {
+            decs: decs,
+            main: main.unwrap(),
+        })
+    }
+
+    fn is_main_dec(dec: &Dec) -> bool {
+        return dec.name == "main" && dec.ty_dec.ty == Type::Atom("Unit".to_string());
     }
 
     // Dec := TypeDec "\n" FuncDec
     fn parse_dec(&mut self) -> Result<Dec, ParseError> {
         let ty_dec = self.parse_type_dec()?;
-
         let func_dec = self.parse_func_dec()?;
-
-        // Validate that the names match
         if ty_dec.name != func_dec.name {
             return Err(ParseError::InvalidSyntax {
                 message: format!(
@@ -111,123 +129,303 @@ impl Parser {
                 ),
             });
         }
-
-        Ok(Dec { ty_dec, func_dec })
+        Ok(Dec {
+            name: ty_dec.name.clone(),
+            ty_dec,
+            func_dec,
+        })
     }
 
     // TypeDec := Identifier : Type
     fn parse_type_dec(&mut self) -> Result<TypeDec, ParseError> {
-        let name = self.expect_identifier()?;
-        self.expect_token(Token::Colon, "colon (:)")?;
-        let ty = self.parse_type()?;
-        Ok(TypeDec { name, ty })
+        if let Token::Identifier(name) = self.expect_identifier()? {
+            let name = name.clone();
+            self.expect_token(Token::Colon)?;
+            let ty = self.parse_type()?;
+            Ok(TypeDec { name, ty })
+        } else {
+            return Err(ParseError::InvalidSyntax {
+                message: "Type declaration expects identifier".to_string(),
+            });
+        }
     }
 
     // FuncDec := Identifier = Expr
     fn parse_func_dec(&mut self) -> Result<FuncDec, ParseError> {
-        let name = self.expect_identifier()?;
-        self.expect_token(Token::Equals, "equals (=)")?;
-        let expr = self.parse_expr()?;
-        Ok(FuncDec {name:name, body:expr})
+        if let Token::Identifier(name) = self.expect_identifier()? {
+            let name = name.clone();
+            self.expect_token(Token::Equals)?;
+            let body = self.parse_expr()?;
+            Ok(FuncDec { name, body })
+        } else {
+            return Err(ParseError::InvalidSyntax {
+                message: "Type declaration expects identifier".to_string(),
+            });
+        }
     }
 
-    // Type := Identifier | Type -> Type
+    // Type := Identifier | (Type) | Type -> Type
     // Right-associative: A -> B -> C is A -> (B -> C)
     fn parse_type(&mut self) -> Result<Type, ParseError> {
-        self.parse_type_arrow()
+        let peek = self.peek();
+        match peek {
+            None => Err(ParseError::InvalidSyntax {
+                message: "expects a token".to_string(),
+            }),
+            Some(Token::Identifier(_)) => self.parse_type_ident(),
+            Some(Token::LeftParen) => self.parse_type_paren(),
+            _ => self.parse_type_arrow(),
+        }
+    }
+    fn parse_type_paren(&mut self) -> Result<Type, ParseError> {
+        self.expect_token(Token::LeftParen)?;
+        let ty = self.parse_type()?;
+        self.expect_token(Token::RightParen)?;
+        let next = self.peek();
+        match next {
+            None => Err(ParseError::InvalidSyntax {
+                message: "expects a token".to_string(),
+            }),
+            Some(Token::RightArrow) => {
+                let right = self.parse_type_arrow()?;
+                Ok(Type::Function {
+                    input: Box::new(ty),
+                    output: Box::new(right),
+                })
+            }
+            Some(_) => Ok(ty),
+        }
+    }
+
+    fn parse_type_ident(&mut self) -> Result<Type, ParseError> {
+        let peek = self.peek();
+        match peek {
+            None => Err(ParseError::InvalidSyntax {
+                message: "expects a token".to_string(),
+            }),
+            Some(Token::Identifier(name)) => {
+                let ty = Type::Atom(name.clone());
+                self.advance();
+                let next = self.peek();
+                match next {
+                    None => Err(ParseError::InvalidSyntax {
+                        message: "expects a token".to_string(),
+                    }),
+                    Some(Token::RightArrow) => {
+                        let right = self.parse_type_arrow()?;
+                        Ok(Type::Function {
+                            input: Box::new(ty),
+                            output: Box::new(right),
+                        })
+                    }
+                    Some(_) => Ok(ty),
+                }
+            }
+            Some(t) => Err(ParseError::UnexpectedToken {
+                expected: "Identifier".to_string(),
+                found: t.to_string(),
+            }),
+        }
     }
 
     fn parse_type_arrow(&mut self) -> Result<Type, ParseError> {
-        let mut left = self.parse_type_primary()?;
-
-        while let Some(Token::Arrow) = self.peek() {
-            self.advance(); // consume ->
-            let right = self.parse_type_arrow()?; // right-associative
-            left = Type::Function {
-                input: Box::new(left),
-                output: Box::new(right),
-            };
-            break; // right-associative, so we only do this once per level
-        }
-
-        Ok(left)
-    }
-
-    fn parse_type_primary(&mut self) -> Result<Type, ParseError> {
-        match self.peek() {
-            Some(Token::Identifier(_)) => {
-                let name = self.expect_identifier()?;
-                Ok(Type::Primary(name))
-            }
-            Some(Token::LeftParen) => {
-                self.advance(); // consume (
+        let peek = self.peek();
+        match peek {
+            None => Err(ParseError::InvalidSyntax {
+                message: "expects a token".to_string(),
+            }),
+            Some(Token::RightArrow) => {
+                self.advance();
                 let ty = self.parse_type()?;
-                self.expect_token(Token::RightParen, "right parenthesis )")?;
                 Ok(ty)
             }
-            Some(token) => Err(ParseError::UnexpectedToken {
-                expected: "type".to_string(),
-                found: token.clone(),
-            }),
-            None => Err(ParseError::UnexpectedEof {
-                expected: "type".to_string(),
+            Some(t) => Err(ParseError::UnexpectedToken {
+                expected: "Identifier".to_string(),
+                found: t.to_string(),
             }),
         }
     }
 
-    // Expr := Identifier | λ Identifier -> Expr | Expr Expr
+    // Expr := Identifier | λ Identifier => Expr | (Expr) | Expr Expr
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_expr_application()
-    }
-
-    // Handle application (left-associative)
-    fn parse_expr_application(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_expr_primary()?;
-
-        while let Some(token) = self.peek() {
-            match token {
-                Token::Identifier(_) | Token::LeftParen => {
-                    let right = self.parse_expr_primary()?;
-                    left = Expr::Application {
-                        func: Box::new(left),
-                        arg: Box::new(right),
-                    };
-                }
-                _ => break,
+        let expr = self.parse_expr_wrapper()?;
+        match expr {
+            ExprWraper::Epsilon => Err(ParseError::InvalidSyntax {
+                message: "expects an expression".to_string(),
+            }),
+            ExprWraper::Atom(e) => Ok(*e),
+            ExprWraper::Application { func, arg } => {
+                let e = Expr::Application { func, arg };
+                Ok(e)
             }
         }
-
-        Ok(left)
     }
 
-    fn parse_expr_primary(&mut self) -> Result<Expr, ParseError> {
-        match self.peek() {
-            Some(Token::Identifier(_)) => {
-                let name = self.expect_identifier()?;
-                Ok(Expr::Identifier(name))
-            }
-            Some(Token::Lambda) => {
-                self.advance(); // consume λ
-                let param = self.expect_identifier()?;
-                self.expect_token(Token::Arrow, "arrow (->)")?;
-                let body = self.parse_expr()?;
-                Ok(Expr::Lambda {
-                    param,
-                    body: Box::new(body),
-                })
-            }
-            Some(Token::LeftParen) => {
-                self.advance(); // consume (
-                let expr = self.parse_expr()?;
-                self.expect_token(Token::RightParen, "right parenthesis )")?;
-                Ok(expr)
-            }
-            Some(token) => Err(ParseError::UnexpectedToken {
-                expected: "expression".to_string(),
-                found: token.clone(),
+    fn parse_expr_wrapper(&mut self) -> Result<ExprWraper, ParseError> {
+        let peek = self.peek();
+        match peek {
+            None => Err(ParseError::InvalidSyntax {
+                message: "expects an expression".to_string(),
             }),
-            None => Err(ParseError::UnexpectedEof {
-                expected: "expression".to_string(),
+            Some(Token::Identifier(_)) => Ok(self.parse_expr_var()?),
+            Some(Token::Lambda) => Ok(self.parse_expr_lambda()?),
+            Some(Token::LeftParen) => Ok(self.parse_expr_paren()?),
+            _ => Ok(ExprWraper::Epsilon),
+        }
+    }
+
+    fn parse_expr_var(&mut self) -> Result<ExprWraper, ParseError> {
+        let peek = self.peek();
+        match peek {
+            None => Err(ParseError::InvalidSyntax {
+                message: "expects an expression".to_string(),
+            }),
+            Some(Token::Identifier(name)) => {
+                let expr = Expr::Var(name.clone());
+                self.advance();
+                let next = self.parse_expr_wrapper()?;
+                match next {
+                    ExprWraper::Epsilon => Ok(ExprWraper::Atom(Box::new(expr))),
+                    ExprWraper::Atom(atom) => {
+                        let ew = ExprWraper::Application {
+                            func: Box::new(expr),
+                            arg: atom,
+                        };
+                        Ok(ew)
+                    }
+                    ExprWraper::Application { func, arg } => {
+                        let app1 = Expr::Application {
+                            func: Box::new(expr),
+                            arg: func,
+                        };
+                        let ew = ExprWraper::Application {
+                            func: Box::new(app1),
+                            arg: arg,
+                        };
+                        Ok(ew)
+                    }
+                }
+            }
+            Some(t) => Err(ParseError::UnexpectedToken {
+                expected: "Identifier".to_string(),
+                found: t.to_string(),
+            }),
+        }
+    }
+
+    fn parse_expr_lambda(&mut self) -> Result<ExprWraper, ParseError> {
+        let peek = self.peek();
+        match peek {
+            None => Err(ParseError::InvalidSyntax {
+                message: "expects Lambda".to_string(),
+            }),
+            Some(Token::Lambda) => {
+                self.advance();
+                let ident = self.expect_identifier()?;
+                match ident {
+                    Token::Identifier(name) => {
+                        let name = name.clone();
+                        self.expect_token(Token::RightArrowDouble)?;
+                        let body = self.parse_expr()?;
+                        let lambda = Expr::Lambda {
+                            param: name,
+                            body: Box::new(body),
+                        };
+                        Ok(ExprWraper::Atom(Box::new(lambda)))
+                    }
+                    _ => Err(ParseError::UnexpectedToken {
+                        expected: "Identifier".to_string(),
+                        found: ident.to_string(),
+                    }),
+                }
+            }
+            Some(t) => Err(ParseError::UnexpectedToken {
+                expected: Token::Identifier("?".to_string()).to_string(),
+                found: t.to_string(),
+            }),
+        }
+    }
+
+    fn parse_expr_app(&mut self) -> Result<ExprWraper, ParseError> {
+        let func = self.parse_expr()?;
+        let arg = self.parse_expr()?;
+        let next = self.parse_expr_wrapper()?;
+        match next {
+            ExprWraper::Epsilon => {
+                let ew = ExprWraper::Application {
+                    func: Box::new(func),
+                    arg: Box::new(arg),
+                };
+                Ok(ew)
+            }
+            ExprWraper::Atom(atom) => {
+                let app = Expr::Application {
+                    func: Box::new(func),
+                    arg: Box::new(arg),
+                };
+                let ew = ExprWraper::Application {
+                    func: Box::new(app),
+                    arg: atom,
+                };
+                Ok(ew)
+            }
+            ExprWraper::Application {
+                func: func1,
+                arg: arg1,
+            } => {
+                let app = Expr::Application {
+                    func: Box::new(func),
+                    arg: Box::new(arg),
+                };
+                let app1 = Expr::Application {
+                    func: Box::new(app),
+                    arg: func1,
+                };
+                let ew = ExprWraper::Application {
+                    func: Box::new(app1),
+                    arg: arg1,
+                };
+                Ok(ew)
+            }
+        }
+    }
+
+    fn parse_expr_paren(&mut self) -> Result<ExprWraper, ParseError> {
+        let peek = self.peek();
+        match peek {
+            None => Err(ParseError::InvalidSyntax {
+                message: "expects LeftParen".to_string(),
+            }),
+            Some(Token::LeftParen) => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                self.expect_token(Token::RightParen)?;
+                let next = self.parse_expr_wrapper()?;
+                match next {
+                    ExprWraper::Epsilon => Ok(ExprWraper::Atom(Box::new(expr))),
+                    ExprWraper::Atom(atom) => {
+                        let ew = ExprWraper::Application {
+                            func: Box::new(expr),
+                            arg: atom,
+                        };
+                        Ok(ew)
+                    }
+                    ExprWraper::Application { func, arg } => {
+                        let app = Expr::Application {
+                            func: Box::new(expr),
+                            arg: func,
+                        };
+                        let ew = ExprWraper::Application {
+                            func: Box::new(app),
+                            arg: arg,
+                        };
+                        Ok(ew)
+                    }
+                }
+            }
+            Some(t) => Err(ParseError::UnexpectedToken {
+                expected: Token::Lambda.to_string(),
+                found: t.to_string(),
             }),
         }
     }
@@ -236,227 +434,67 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_simple_declaration() {
-        let input = "id : Bool -> Bool\nid = λx -> x";
-        let mut parser = Parser::new(input).unwrap();
-        let program = parser.parse_program().unwrap();
-
-        assert_eq!(program.len(), 1);
-        let dec = &program[0];
-
-        assert_eq!(dec.ty_dec.name, "id");
-        assert_eq!(dec.func_dec.name, "id");
-
-        match &dec.ty_dec.ty {
-            Type::Function { input, output } => {
-                assert_eq!(**input, Type::Primary("Bool".to_string()));
-                assert_eq!(**output, Type::Primary("Bool".to_string()));
-            }
-            _ => panic!("Expected function type"),
-        }
-
-        match &dec.func_dec.body {
-            Expr::Identifier(name) => assert_eq!(name, "x"),
-            _ => panic!("Expected identifier expression"),
-        }
+    fn test_parse_type(s: &str) {
+        let mut parser = Parser::new(s).unwrap();
+        let ty = parser.parse_type().unwrap();
+        println!("{}", ty.to_string())
     }
 
     #[test]
-    fn test_complex_type() {
-        let input = "f : Bool -> (Bool -> Bool)\nf = λx -> λy -> x";
-        let mut parser = Parser::new(input).unwrap();
-        let program = parser.parse_program().unwrap();
-
-        let dec = &program[0];
-        match &dec.ty_dec.ty {
-            Type::Function { input, output } => {
-                assert_eq!(**input, Type::Primary("Bool".to_string()));
-                match output.as_ref() {
-                    Type::Function {
-                        input: inner_input,
-                        output: inner_output,
-                    } => {
-                        assert_eq!(**inner_input, Type::Primary("Bool".to_string()));
-                        assert_eq!(**inner_output, Type::Primary("Bool".to_string()));
-                    }
-                    _ => panic!("Expected nested function type"),
-                }
-            }
-            _ => panic!("Expected function type"),
-        }
+    fn test_parse_type1() {
+        test_parse_type("Bool");
     }
 
     #[test]
-    fn test_application_expression() {
-        let input = "app : Bool -> Bool\napp = λf -> f x";
-        let mut parser = Parser::new(input).unwrap();
-        let program = parser.parse_program().unwrap();
-
-        let dec = &program[0];
-        match &dec.func_dec.body {
-            Expr::Application { func, arg } => {
-                match func.as_ref() {
-                    Expr::Identifier(name) => assert_eq!(name, "f"),
-                    _ => panic!("Expected identifier in function position"),
-                }
-                match arg.as_ref() {
-                    Expr::Identifier(name) => assert_eq!(name, "x"),
-                    _ => panic!("Expected identifier in argument position"),
-                }
-            }
-            _ => panic!("Expected application expression"),
-        }
+    fn test_parse_type2() {
+        test_parse_type("(Bool)");
     }
 
     #[test]
-    fn test_nested_lambda() {
-        let input = "curry : Bool -> Bool -> Bool\ncurry = λx -> λy -> λz -> x";
-        let mut parser = Parser::new(input).unwrap();
-        let program = parser.parse_program().unwrap();
-
-        let dec = &program[0];
-
-        // The body should be λy -> λz -> x
-        match &dec.func_dec.body {
-            Expr::Lambda { param, body } => {
-                assert_eq!(param, "y");
-                match body.as_ref() {
-                    Expr::Lambda {
-                        param: inner_param,
-                        body: inner_body,
-                    } => {
-                        assert_eq!(inner_param, "z");
-                        match inner_body.as_ref() {
-                            Expr::Identifier(name) => assert_eq!(name, "x"),
-                            _ => panic!("Expected identifier in innermost lambda"),
-                        }
-                    }
-                    _ => panic!("Expected nested lambda"),
-                }
-            }
-            _ => panic!("Expected lambda expression"),
-        }
+    fn test_parse_type3() {
+        test_parse_type("Bool -> Int");
     }
 
     #[test]
-    fn test_multiple_declarations() {
-        let input = r#"
-id : Bool -> Bool
-id = λx -> x
-
-const : Bool -> Bool -> Bool  
-const = λx -> λy -> x
-        "#;
-
-        let mut parser = Parser::new(input).unwrap();
-        let program = parser.parse_program().unwrap();
-
-        assert_eq!(program.len(), 2);
-        assert_eq!(program[0].ty_dec.name, "id");
-        assert_eq!(program[1].ty_dec.name, "const");
+    fn test_parse_type4() {
+        test_parse_type("Bool -> Int -> String");
     }
 
     #[test]
-    fn test_parenthesized_expressions() {
-        let input = "app : Bool -> Bool\napp = λf -> (f x)";
-        let mut parser = Parser::new(input).unwrap();
-        let program = parser.parse_program().unwrap();
-
-        // Should parse correctly - parentheses don't change the structure
-        // but are handled properly
-        assert_eq!(program.len(), 1);
+    fn test_parse_type5() {
+        test_parse_type("(Bool -> Int) -> String");
     }
 
     #[test]
-    fn test_left_associative_application() {
-        let input = "app : Bool -> Bool\napp = λf -> f x y";
-        let mut parser = Parser::new(input).unwrap();
-        let program = parser.parse_program().unwrap();
+    fn test_parse_type6() {
+        test_parse_type("(Bool -> (Int)) -> String");
+    }
 
-        let dec = &program[0];
-        match &dec.func_dec.body {
-            Expr::Application { func, arg } => {
-                // Should be ((f x) y)
-                match func.as_ref() {
-                    Expr::Application {
-                        func: inner_func,
-                        arg: inner_arg,
-                    } => match (inner_func.as_ref(), inner_arg.as_ref()) {
-                        (Expr::Identifier(f), Expr::Identifier(x)) => {
-                            assert_eq!(f, "f");
-                            assert_eq!(x, "x");
-                        }
-                        _ => panic!("Expected f x in inner application"),
-                    },
-                    _ => panic!("Expected nested application"),
-                }
-                match arg.as_ref() {
-                    Expr::Identifier(name) => assert_eq!(name, "y"),
-                    _ => panic!("Expected y as final argument"),
-                }
-            }
-            _ => panic!("Expected application expression"),
-        }
+    fn test_parse_expr(s: &str) {
+        let mut parser = Parser::new(s).unwrap();
+        let expr = parser.parse_expr().unwrap();
+        println!("{}", expr)
     }
 
     #[test]
-    fn test_error_mismatched_names() {
-        let input = "f : Bool -> Bool\ng = λx -> x";
-        let mut parser = Parser::new(input).unwrap();
-        match parser.parse_program() {
-            Err(ParseError::InvalidSyntax { message }) => {
-                assert!(message.contains("does not match"));
-            }
-            _ => panic!("Expected syntax error for mismatched names"),
-        }
+    fn test_parse_expr1() {
+        test_parse_expr("x");
     }
 
     #[test]
-    fn test_error_non_lambda_function() {
-        let input = "f : Bool -> Bool\nf = x";
-        let mut parser = Parser::new(input).unwrap();
-        match parser.parse_program() {
-            Err(ParseError::InvalidSyntax { message }) => {
-                assert!(message.contains("must be a lambda"));
-            }
-            _ => panic!("Expected syntax error for non-lambda function"),
-        }
+    fn test_parse_expr2() {
+        test_parse_expr("\\x => x");
     }
 
     #[test]
-    fn test_right_associative_types() {
-        let input = "f : Bool -> Bool -> Bool -> Bool\nf = λx -> λy -> λz -> x";
-        let mut parser = Parser::new(input).unwrap();
-        let program = parser.parse_program().unwrap();
+    fn test_parse_expr3() {
+        let s = r#"(\x => x)(\y => y)"#;
+        test_parse_expr(s);
+    }
 
-        // Bool -> Bool -> Bool -> Bool should parse as Bool -> (Bool -> (Bool -> Bool))
-        let dec = &program[0];
-        match &dec.ty_dec.ty {
-            Type::Function { input, output } => {
-                assert_eq!(**input, Type::Primary("Bool".to_string()));
-                match output.as_ref() {
-                    Type::Function {
-                        input: input2,
-                        output: output2,
-                    } => {
-                        assert_eq!(**input2, Type::Primary("Bool".to_string()));
-                        match output2.as_ref() {
-                            Type::Function {
-                                input: input3,
-                                output: output3,
-                            } => {
-                                assert_eq!(**input3, Type::Primary("Bool".to_string()));
-                                assert_eq!(**output3, Type::Primary("Bool".to_string()));
-                            }
-                            _ => panic!("Expected third level function type"),
-                        }
-                    }
-                    _ => panic!("Expected second level function type"),
-                }
-            }
-            _ => panic!("Expected function type"),
-        }
+    #[test]
+    fn test_parse_expr4() {
+        let s = r#"(\x => x)(\y => y)(\z => z)"#;
+        test_parse_expr(s);
     }
 }

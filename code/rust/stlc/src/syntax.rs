@@ -1,10 +1,13 @@
+use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
-pub struct Porgram {
-    pub decs : Vec<Dec>
+pub struct Program {
+    pub decs: Vec<Dec>,
+    pub main: Dec,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dec {
+    pub name: String,
     pub ty_dec: TypeDec,
     pub func_dec: FuncDec,
 }
@@ -23,22 +26,60 @@ pub struct FuncDec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    Primary(String),
-    Function {
-        input: Box<Type>,
-        output: Box<Type>,
-    },
+    Atom(String), //  todo : show be Atom
+    Function { input: Box<Type>, output: Box<Type> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    Identifier(String),
-    Application {
-        func: Box<Expr>,
-        arg: Box<Expr>,
-    },
-    Lambda {
-        param: String,
-        body: Box<Expr>,
-    },
+    Var(String), // todo : should be Var
+    Application { func: Box<Expr>, arg: Box<Expr> },
+    Lambda { param: String, body: Box<Expr> },
+}
+
+impl fmt::Display for Program {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for dec in &self.decs {
+            writeln!(f, "{dec}")?;
+        }
+        writeln!(f, "main: {}", self.main)
+    }
+}
+
+impl fmt::Display for Dec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{}", self.ty_dec)?;
+        writeln!(f, "{}", self.func_dec)
+    }
+}
+
+impl fmt::Display for TypeDec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{} : {})", self.name, self.ty)
+    }
+}
+
+impl fmt::Display for FuncDec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} = {})", self.name, self.body)
+    }
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Type::Atom(s) => write!(f, "{s}"),
+            Type::Function { input, output } => write!(f, "({input} -> {output})"),
+        }
+    }
+}
+
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Expr::Var(s) => write!(f, "{s}"),
+            Expr::Application { func, arg } => write!(f, "({func} {arg})"),
+            Expr::Lambda { param, body } => write!(f, "(λ{param} => {body})"),
+        }
+    }
 }
