@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self, write};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Identifier(String),
@@ -12,7 +12,21 @@ pub enum Token {
     RightArrowDouble, // =>
     EOF,
 }
-
+impl Token {
+    fn size(&self) -> usize {
+        match self {
+            Token::Identifier(s) => s.len(),
+            Token::Colon => 1,
+            Token::RightArrow => 2,
+            Token::Equals => 1,
+            Token::Lambda => 1,
+            Token::LeftParen => 1,
+            Token::RightParen => 1,
+            Token::RightArrowDouble => 2,
+            Token::EOF => 0,
+        }
+    }
+}
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -29,6 +43,26 @@ impl fmt::Display for Token {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordToken {
+    pub token: Token,
+    pub row: usize, // starts with 1
+    pub col: usize, // starts with 1
+    pub size: usize,
+}
+
+impl fmt::Display for CoordToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ({}, {})", self.token, self.row, self.size)
+    }
+}
+
+impl CoordToken {
+    pub fn is_token(&self, token: Token) -> bool {
+        self.token == token
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum LexerError {
     UnexpectedChar { expected: Vec<char>, found: char },
@@ -38,6 +72,8 @@ pub enum LexerError {
 pub struct Lexer {
     input: Vec<char>,
     position: usize,
+    row: usize, // starts with 1
+    col: usize, // starts with 1
 }
 
 impl Lexer {
@@ -46,6 +82,25 @@ impl Lexer {
         Self {
             input: chars,
             position: 0,
+            row: 1,
+            col: 1,
+        }
+    }
+
+    fn wrap_token(&self, token: Token) -> CoordToken {
+        CoordToken {
+            token: token.clone(),
+            row: self.row,
+            col: self.col,
+            size: token.size(),
+        }
+    }
+    fn wrap_token_row_col(&self, token: Token, row: usize, col: usize) -> CoordToken {
+        CoordToken {
+            token: token.clone(),
+            row: row,
+            col: col,
+            size: token.size(),
         }
     }
 
@@ -54,7 +109,42 @@ impl Lexer {
     }
 
     fn advance(&mut self) {
-        self.position += 1;
+        match std::env::consts::OS {
+            "windows" => {
+                // \r\n
+                match self.peek_many(2) {
+                    Some(peek2) => {
+                        if peek2 == "\r\n" {
+                            self.position += 2;
+                            self.newline();
+                        } else {
+                            self.position += 1;
+                            self.col +=1;
+                        }
+                    }
+                    None => {}
+                }
+            }
+            _ => {
+                // \n
+                match self.peek() {
+                    Some(peek) => {
+                        if peek == '\n' {
+                            self.position += 1;
+                            self.newline();
+                        } else {
+                            self.position += 1;
+                            self.col += 1;
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+    fn newline(&mut self) {
+        self.row += 1;
+        self.col = 1;
     }
 
     fn peek_many(&self, n: usize) -> Option<String> {
@@ -66,7 +156,9 @@ impl Lexer {
     }
 
     fn advance_many(&mut self, n: usize) {
-        self.position += n;
+        for _ in 0..n  {
+            self.advance();
+        }
     }
 
     fn skip_whitespaces(&mut self) {
@@ -122,11 +214,13 @@ impl Lexer {
         Some(result)
     }
 
-    pub fn next_token(&mut self) -> Result<Token, LexerError> {
+    pub fn next_token(&mut self) -> Result<CoordToken, LexerError> {
         loop {
             self.skip_whitespaces();
             match self.peek() {
-                None => return Ok(Token::EOF),
+                None => {
+                    return Ok(self.wrap_token(Token::EOF));
+                }
                 Some('-') => {
                     let next_pos = self.position + 1;
                     match self.input.get(next_pos) {
@@ -135,8 +229,9 @@ impl Lexer {
                             continue;
                         }
                         Some('>') => {
+                            let token = self.wrap_token(Token::RightArrow);
                             self.advance_many(2);
-                            return Ok(Token::RightArrow);
+                            return Ok(token);
                         }
                         Some(other) => {
                             return Err(LexerError::UnexpectedChar {
@@ -156,52 +251,49 @@ impl Lexer {
                     let next_pos = self.position + 1;
                     match self.input.get(next_pos) {
                         Some('>') => {
+                            let token = self.wrap_token(Token::RightArrowDouble);
                             self.advance_many(2);
-                            return Ok(Token::RightArrowDouble);
+                            return Ok(token);
                         }
-                        Some(' ') => {
+                        _ => {
+                            let token = self.wrap_token(Token::Equals);
                             self.advance();
-                            return Ok(Token::Equals);
-                        }
-
-                        Some(other) => {
-                            return Err(LexerError::UnexpectedChar {
-                                expected: vec![' ', '>'],
-                                found: *other,
-                            });
-                        }
-                        None => {
-                            return Err(LexerError::UnexpectedChar {
-                                expected: vec!['-', '>'],
-                                found: '\0',
-                            });
+                            return Ok(token);
                         }
                     }
                 }
                 Some(':') => {
+                    let token = self.wrap_token(Token::Colon);
                     self.advance();
-                    return Ok(Token::Colon);
+                    return Ok(token);
                 }
 
                 Some('\\') | Some('λ') => {
+                    let token = self.wrap_token(Token::Lambda);
                     self.advance();
-                    return Ok(Token::Lambda);
+                    return Ok(token);
                 }
                 Some('(') => {
+                    let token = self.wrap_token(Token::LeftParen);
                     self.advance();
-                    return Ok(Token::LeftParen);
+                    return Ok(token);
                 }
                 Some(')') => {
+                    let token = self.wrap_token(Token::RightParen);
                     self.advance();
-                    return Ok(Token::RightParen);
+                    return Ok(token);
                 }
                 Some(ch) if Self::is_identifier_start(ch) => {
+                    let row = self.row;
+                    let col = self.col;
                     let identifier = self.read_identifier().expect("error: next_token");
-                    return Ok(match identifier.as_str() {
+                    let token = match identifier.as_str() {
                         // "True" => Token::BooleanLiteral(true),
                         // "False" => Token::BooleanLiteral(false),
                         _ => Token::Identifier(identifier),
-                    });
+                    };
+                    let coord_token = self.wrap_token_row_col(token, row, col);
+                    return Ok(coord_token);
                 }
                 Some(ch) => {
                     return Err(LexerError::UnknownChar { found: ch });
@@ -210,11 +302,11 @@ impl Lexer {
         }
     }
 
-    pub fn tokenize(&mut self) -> Result<Vec<Token>, LexerError> {
+    pub fn tokenize(&mut self) -> Result<Vec<CoordToken>, LexerError> {
         let mut tokens = Vec::new();
         loop {
             let token = self.next_token()?;
-            let is_eof = token == Token::EOF;
+            let is_eof = token.is_token(Token::EOF);
             tokens.push(token);
             if is_eof {
                 break;
@@ -226,18 +318,20 @@ impl Lexer {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::zip;
+
     use super::*;
 
     #[test]
     fn test_empty_input() {
         let mut lexer = Lexer::new("");
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
     fn test_whitespace_only() {
         let mut lexer = Lexer::new("   \t\n  ");
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
@@ -254,12 +348,12 @@ mod tests {
         for (input, expected) in test_cases {
             let mut lexer = Lexer::new(input);
             assert_eq!(
-                lexer.next_token().unwrap(),
-                expected,
+                lexer.next_token().unwrap().is_token(expected),
+                true,
                 "Failed for input: {}",
                 input
             );
-            assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+            assert!(lexer.next_token().unwrap().is_token(Token::EOF));
         }
     }
 
@@ -277,15 +371,19 @@ mod tests {
         for (input, expected) in test_cases {
             let mut lexer = Lexer::new(input);
             match lexer.next_token().unwrap() {
-                Token::Identifier(name) => assert_eq!(name, expected),
+                CoordToken {
+                    token: Token::Identifier(name),
+                    ..
+                } => assert_eq!(name, expected),
                 other => panic!("Expected identifier, got {:?}", other),
             }
-            assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+            assert!(lexer.next_token().unwrap().is_token(Token::EOF));
         }
     }
 
-    #[test]
-    /*   fn test_boolean_literals() {
+    /*
+      #[test]
+      fn test_boolean_literals() {
         let mut lexer = Lexer::new("True");
         assert_eq!(lexer.next_token().unwrap(), Token::BooleanLiteral(true));
         assert_eq!(lexer.next_token().unwrap(), Token::EOF);
@@ -297,31 +395,38 @@ mod tests {
     #[test]
     fn test_comments() {
         let mut lexer = Lexer::new("-- this is a comment\nx");
-        assert_eq!(
-            lexer.next_token().unwrap(),
-            Token::Identifier("x".to_string())
+        assert!(
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::Identifier("x".to_string()))
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
     fn test_comment_at_end() {
         let mut lexer = Lexer::new("x -- comment at end");
-        assert_eq!(
-            lexer.next_token().unwrap(),
-            Token::Identifier("x".to_string())
+        assert!(
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::Identifier("x".to_string()))
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
     fn test_multiple_comments() {
         let mut lexer = Lexer::new("-- comment 1\n-- comment 2\nx");
         assert_eq!(
-            lexer.next_token().unwrap(),
-            Token::Identifier("x".to_string())
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::Identifier("x".to_string())),
+            true
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
@@ -336,7 +441,7 @@ mod tests {
         ];
 
         for expected_token in expected {
-            assert_eq!(lexer.next_token().unwrap(), expected_token);
+            assert!(lexer.next_token().unwrap().is_token(expected_token));
         }
     }
 
@@ -359,7 +464,7 @@ mod tests {
         ];
 
         for expected_token in expected {
-            assert_eq!(lexer.next_token().unwrap(), expected_token);
+            assert!(lexer.next_token().unwrap().is_token(expected_token));
         }
     }
 
@@ -386,7 +491,7 @@ mod tests {
         ];
 
         for expected_token in expected {
-            assert_eq!(lexer.next_token().unwrap(), expected_token);
+            assert!(lexer.next_token().unwrap().is_token(expected_token));
         }
     }
 
@@ -394,13 +499,15 @@ mod tests {
     fn test_tokenize_helper() {
         let mut lexer = Lexer::new("x : Bool");
         let tokens = lexer.tokenize().unwrap();
-        let expected = vec![
+        let expecteds = vec![
             Token::Identifier("x".to_string()),
             Token::Colon,
             Token::Identifier("Bool".to_string()),
             Token::EOF,
         ];
-        assert_eq!(tokens, expected);
+        for (token, expected) in zip(tokens, expecteds) {
+            assert!(token.is_token(expected));
+        }
     }
 
     #[test]
@@ -416,7 +523,7 @@ mod tests {
         ];
 
         for expected_token in expected {
-            assert_eq!(lexer.next_token().unwrap(), expected_token);
+            assert!(lexer.next_token().unwrap().is_token(expected_token));
         }
     }
 
@@ -431,7 +538,7 @@ mod tests {
         ];
 
         for expected_token in expected {
-            assert_eq!(lexer.next_token().unwrap(), expected_token);
+            assert!(lexer.next_token().unwrap().is_token(expected_token));
         }
     }
 
@@ -486,24 +593,33 @@ mod tests {
     fn test_identifier_with_numbers() {
         let mut lexer = Lexer::new("var123 _var456");
         assert_eq!(
-            lexer.next_token().unwrap(),
-            Token::Identifier("var123".to_string())
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::Identifier("var123".to_string())),
+            true
         );
         assert_eq!(
-            lexer.next_token().unwrap(),
-            Token::Identifier("_var456".to_string())
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::Identifier("_var456".to_string())),
+            true
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
     fn test_underscore_identifier() {
         let mut lexer = Lexer::new("_");
         assert_eq!(
-            lexer.next_token().unwrap(),
-            Token::Identifier("_".to_string())
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::Identifier("_".to_string())),
+            true
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
@@ -519,7 +635,7 @@ mod tests {
         ];
 
         for expected_token in expected {
-            assert_eq!(lexer.next_token().unwrap(), expected_token);
+            assert!(lexer.next_token().unwrap().is_token(expected_token));
         }
     }
 
@@ -527,17 +643,20 @@ mod tests {
     fn test_comment_without_newline() {
         let mut lexer = Lexer::new("x -- comment");
         assert_eq!(
-            lexer.next_token().unwrap(),
-            Token::Identifier("x".to_string())
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::Identifier("x".to_string())),
+            true
         );
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
     fn test_unicode_lambda() {
         let mut lexer = Lexer::new("λ");
-        assert_eq!(lexer.next_token().unwrap(), Token::Lambda);
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(lexer.next_token().unwrap().is_token(Token::Lambda));
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 
     #[test]
@@ -556,12 +675,54 @@ mod tests {
         let tokens = lexer.tokenize().unwrap();
 
         // 验证一些关键 token
-        assert!(tokens.contains(&Token::Identifier("id".to_string())));
-        assert!(tokens.contains(&Token::Identifier("apply".to_string())));
-        assert!(tokens.contains(&Token::Lambda));
-        assert!(tokens.contains(&Token::RightArrow));
-        assert!(tokens.contains(&Token::Colon));
-        assert!(tokens.contains(&Token::Equals));
-        assert_eq!(tokens.last(), Some(&Token::EOF));
+        assert!(
+            tokens
+                .clone()
+                .into_iter()
+                .map(|coord_token| coord_token.token)
+                .collect::<Vec<Token>>()
+                .contains(&Token::Identifier("id".to_string()))
+        );
+        assert!(
+            tokens
+                .clone()
+                .into_iter()
+                .map(|coord_token| coord_token.token)
+                .collect::<Vec<Token>>()
+                .contains(&Token::Identifier("apply".to_string()))
+        );
+        assert!(
+            tokens
+                .clone()
+                .into_iter()
+                .map(|coord_token| coord_token.token)
+                .collect::<Vec<Token>>()
+                .contains(&Token::Lambda)
+        );
+        assert!(
+            tokens
+                .clone()
+                .into_iter()
+                .map(|coord_token| coord_token.token)
+                .collect::<Vec<Token>>()
+                .contains(&Token::RightArrow)
+        );
+        assert!(
+            tokens
+                .clone()
+                .into_iter()
+                .map(|coord_token| coord_token.token)
+                .collect::<Vec<Token>>()
+                .contains(&Token::Colon)
+        );
+        assert!(
+            tokens
+                .clone()
+                .into_iter()
+                .map(|coord_token| coord_token.token)
+                .collect::<Vec<Token>>()
+                .contains(&Token::Equals)
+        );
+        assert!(tokens.last().unwrap().is_token(Token::EOF));
     }
 }
