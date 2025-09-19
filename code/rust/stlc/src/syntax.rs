@@ -1,4 +1,13 @@
 use std::fmt;
+
+/*
+ * Program := Dec Dec*
+ * Dec := TypeDec '\n' FuncDec '\n'
+ * TypeDec := Identifier ':' Type
+ * FuncDec := Identifier '=' Expr
+ * Type := Atom | '(' Type '->' Type ')'
+ * Expr := Var | Application | 'λ' Identifier '=>' Expr | (Expr) | Expr Expr
+ */
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub decs: Vec<Dec>,

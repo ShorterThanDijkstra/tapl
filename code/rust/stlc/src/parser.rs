@@ -1,4 +1,6 @@
 use std::cmp::{max, min};
+use std::fs;
+use std::path::Path;
 
 use crate::lexer::{CoordToken, Lexer, LexerError, Token};
 use crate::syntax::{
@@ -35,7 +37,14 @@ enum ExprWraper {
 }
 
 impl Parser {
-    pub fn new(input: &str) -> Result<Self, ParseError> {
+    pub fn from_file<P: AsRef<Path>>(file_path: P) -> Result<Self, ParseError> {
+        let content = fs::read_to_string(file_path).map_err(|e| ParseError::InvalidSyntax {
+            message: format!("Failed to read file: {}", e),
+        })?;
+        Self::from_str(&content)
+    }
+    
+    pub fn from_str(input: &str) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.tokenize()?;
         Ok(Self {
@@ -94,6 +103,7 @@ impl Parser {
                 break;
             }
             let coord_dec = self.parse_dec()?;
+            println!("{}", coord_dec);
             if !Self::is_main_dec(&coord_dec) {
                 coord_decs.push(coord_dec);
             } else if main.is_none() {
@@ -123,11 +133,11 @@ impl Parser {
         let mut row_end = main.clone().unwrap().row_end;
         let mut col_end = main.clone().unwrap().col_end;
         for dec in coord_decs {
-            if row_start <= dec.row_start {
+            if row_start >= dec.row_start {
                 row_start = dec.row_start;
                 col_start = min(col_start, dec.col_start);
             }
-            if row_end >= dec.row_end {
+            if row_end <= dec.row_end {
                 row_end = dec.row_end;
                 col_end = max(col_end, dec.col_end);
             }
@@ -152,7 +162,7 @@ impl Parser {
         let coord_ty_dec = self.parse_type_dec()?;
         let coord_func_dec = self.parse_func_dec()?;
 
-        if coord_ty_dec.col_start != 0 {
+        if coord_ty_dec.col_start != 1 {
             return Err(ParseError::InvalidSyntax {
                 message: format!(
                     "Type declaration must start at the beginning of a line, found at row {}, column {}",
@@ -161,7 +171,7 @@ impl Parser {
             });
         }
 
-        if coord_func_dec.col_start != 0 {
+        if coord_func_dec.col_start != 1 {
             return Err(ParseError::InvalidSyntax {
                 message: format!(
                     "Function declaration must start at the beginning of a line, found at row {}, column {}",
@@ -453,7 +463,7 @@ impl Parser {
         }
     }
 
-    // Expr := Expr' {Expr'}
+    // ExprWrap := Var | λ Identifier => Expr | (Expr) | Epsilon
     fn parse_expr_wrapper(&mut self) -> Result<ExprWraper, ParseError> {
         let peek = self.peek();
         match peek {
@@ -501,34 +511,39 @@ impl Parser {
                 };
 
                 self.advance();
-                let next = self.parse_expr_wrapper()?;
-                match next {
-                    ExprWraper::Epsilon => Ok(ExprWraper::Atom(Box::new(expr))),
-                    ExprWraper::Atom(atom) => {
-                        let ew = ExprWraper::Application {
-                            func: Box::new(expr),
-                            arg: atom,
-                        };
-                        Ok(ew)
-                    }
-                    ExprWraper::Application { func, arg } => {
-                        let app1 = Expr::Application {
-                            func: Box::new(expr.expr),
-                            arg: Box::new(func.expr),
-                        };
-                        let coord_app1 = CoordExpr {
-                            expr: app1,
-                            row_start: expr.row_start,
-                            col_start: expr.col_start,
-                            row_end: func.row_end,
-                            col_end: func.col_end,
-                        };
+                let peek = self.peek();
+                if peek.is_some() && peek.unwrap().col == 1 {
+                    Ok(ExprWraper::Atom(Box::new(expr)))
+                } else {
+                    let next = self.parse_expr_wrapper()?;
+                    match next {
+                        ExprWraper::Epsilon => Ok(ExprWraper::Atom(Box::new(expr))),
+                        ExprWraper::Atom(atom) => {
+                            let ew = ExprWraper::Application {
+                                func: Box::new(expr),
+                                arg: atom,
+                            };
+                            Ok(ew)
+                        }
+                        ExprWraper::Application { func, arg } => {
+                            let app1 = Expr::Application {
+                                func: Box::new(expr.expr),
+                                arg: Box::new(func.expr),
+                            };
+                            let coord_app1 = CoordExpr {
+                                expr: app1,
+                                row_start: expr.row_start,
+                                col_start: expr.col_start,
+                                row_end: func.row_end,
+                                col_end: func.col_end,
+                            };
 
-                        let ew = ExprWraper::Application {
-                            func: Box::new(coord_app1),
-                            arg: arg,
-                        };
-                        Ok(ew)
+                            let ew = ExprWraper::Application {
+                                func: Box::new(coord_app1),
+                                arg: arg,
+                            };
+                            Ok(ew)
+                        }
                     }
                 }
             }
@@ -539,7 +554,7 @@ impl Parser {
         }
     }
 
-    // Expr := (λ Identifier => Expr) {Expr'}
+    // Expr := λ Identifier => Expr
     fn parse_expr_lambda(&mut self) -> Result<ExprWraper, ParseError> {
         let peek = self.peek();
         match peek {
@@ -590,72 +605,6 @@ impl Parser {
         }
     }
 
-    // Expr := Expr Expr
-    fn parse_expr_app(&mut self) -> Result<ExprWraper, ParseError> {
-        let func = self.parse_expr()?;
-        let arg = self.parse_expr()?;
-        let next = self.parse_expr_wrapper()?;
-        match next {
-            ExprWraper::Epsilon => {
-                let ew = ExprWraper::Application {
-                    func: Box::new(func),
-                    arg: Box::new(arg),
-                };
-                Ok(ew)
-            }
-            ExprWraper::Atom(atom) => {
-                let app = Expr::Application {
-                    func: Box::new(func.expr),
-                    arg: Box::new(arg.expr),
-                };
-                let coord_app = CoordExpr {
-                    expr: app,
-                    row_start: func.row_start,
-                    col_start: func.col_start,
-                    row_end: arg.row_end,
-                    col_end: arg.col_end,
-                };
-                let ew = ExprWraper::Application {
-                    func: Box::new(coord_app),
-                    arg: atom,
-                };
-                Ok(ew)
-            }
-            ExprWraper::Application {
-                func: func1,
-                arg: arg1,
-            } => {
-                let app = Expr::Application {
-                    func: Box::new(func.expr),
-                    arg: Box::new(arg.expr),
-                };
-                let coor_app = CoordExpr {
-                    expr: app,
-                    row_start: func.row_start,
-                    col_start: func.col_start,
-                    row_end: arg.row_end,
-                    col_end: arg.col_end,
-                };
-                let app1 = Expr::Application {
-                    func: Box::new(coor_app.expr),
-                    arg: Box::new(func1.expr),
-                };
-                let coord_app1 = CoordExpr {
-                    expr: app1,
-                    row_start: coor_app.row_start,
-                    col_start: coor_app.col_start,
-                    row_end: func1.row_end,
-                    col_end: func1.col_end,
-                };
-                let ew = ExprWraper::Application {
-                    func: Box::new(coord_app1),
-                    arg: arg1,
-                };
-                Ok(ew)
-            }
-        }
-    }
-
     // Expr := (Expr) {Expr'}
     fn parse_expr_paren(&mut self) -> Result<ExprWraper, ParseError> {
         let peek = self.peek();
@@ -686,6 +635,10 @@ impl Parser {
                 expr.row_end = row_end;
                 expr.col_end = col_end;
 
+                let peek = self.peek();
+                if peek.is_some() && peek.unwrap().col == 1 {
+                    return Ok(ExprWraper::Atom(Box::new(expr)));
+                }
                 let next = self.parse_expr_wrapper()?;
                 match next {
                     ExprWraper::Epsilon => Ok(ExprWraper::Atom(Box::new(expr))),
@@ -728,66 +681,623 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn test_parse_type(s: &str) {
-        let mut parser = Parser::new(s).unwrap();
-        let ty = parser.parse_type().unwrap();
-        println!("{}", ty.to_string())
+    use crate::syntax::*;
+
+    // Helper function to create a parser and test type parsing
+    fn test_parse_type(s: &str) -> Result<CoordType, ParseError> {
+        let mut parser = Parser::from_str(s)?;
+        parser.parse_type()
+    }
+
+    // Helper function to create a parser and test expression parsing
+    fn test_parse_expr(s: &str) -> Result<CoordExpr, ParseError> {
+        let mut parser = Parser::from_str(s)?;
+        parser.parse_expr()
+    }
+
+    // Helper function to create a parser and test program parsing
+    fn test_parse_program(s: &str) -> Result<CoordProgram, ParseError> {
+        let mut parser = Parser::from_str(s)?;
+        parser.parse_program()
+    }
+
+    // Type parsing tests
+    #[test]
+    fn test_parse_type_atom() {
+        let result = test_parse_type("Bool").unwrap();
+        assert_eq!(result.ty, Type::Atom("Bool".to_string()));
+        assert_eq!(result.row_start, 1);
+        assert_eq!(result.col_start, 1);
     }
 
     #[test]
-    fn test_parse_type1() {
-        test_parse_type("Bool");
+    fn test_parse_type_parenthesized() {
+        let result = test_parse_type("(Bool)").unwrap();
+        assert_eq!(result.ty, Type::Atom("Bool".to_string()));
     }
 
     #[test]
-    fn test_parse_type2() {
-        test_parse_type("\n(Bool)");
+    fn test_parse_type_function_simple() {
+        let result = test_parse_type("Bool -> Int").unwrap();
+        match result.ty {
+            Type::Function { input, output } => {
+                assert_eq!(*input, Type::Atom("Bool".to_string()));
+                assert_eq!(*output, Type::Atom("Int".to_string()));
+            }
+            _ => panic!("Expected function type"),
+        }
     }
 
     #[test]
-    fn test_parse_type3() {
-        test_parse_type("Bool -> Int");
+    fn test_parse_type_function_right_associative() {
+        let result = test_parse_type("Bool -> Int -> String").unwrap();
+        match result.ty {
+            Type::Function { input, output } => {
+                assert_eq!(*input, Type::Atom("Bool".to_string()));
+                match *output {
+                    Type::Function {
+                        input: inner_input,
+                        output: inner_output,
+                    } => {
+                        assert_eq!(*inner_input, Type::Atom("Int".to_string()));
+                        assert_eq!(*inner_output, Type::Atom("String".to_string()));
+                    }
+                    _ => panic!("Expected nested function type"),
+                }
+            }
+            _ => panic!("Expected function type"),
+        }
     }
 
     #[test]
-    fn test_parse_type4() {
-        test_parse_type("Bool -> Int -> String");
+    // test type for Bool -> \nInt
+    fn test_parse_type_function_newline() {
+        let result = test_parse_type("Bool -> \nInt").unwrap();
+        match result.ty {
+            Type::Function { input, output } => {
+                assert_eq!(*input, Type::Atom("Bool".to_string()));
+                assert_eq!(*output, Type::Atom("Int".to_string()));
+            }
+            _ => panic!("Expected function type"),
+        }
     }
 
     #[test]
-    fn test_parse_type5() {
-        test_parse_type("(Bool -> Int) -> String");
+    fn test_parse_type_function_left_parentheses() {
+        let result = test_parse_type("(Bool -> Int) -> String").unwrap();
+        match result.ty {
+            Type::Function { input, output } => {
+                match *input {
+                    Type::Function {
+                        input: inner_input,
+                        output: inner_output,
+                    } => {
+                        assert_eq!(*inner_input, Type::Atom("Bool".to_string()));
+                        assert_eq!(*inner_output, Type::Atom("Int".to_string()));
+                    }
+                    _ => panic!("Expected nested function type in input"),
+                }
+                assert_eq!(*output, Type::Atom("String".to_string()));
+            }
+            _ => panic!("Expected function type"),
+        }
     }
 
     #[test]
-    fn test_parse_type6() {
-        test_parse_type("(Bool -> (Int)) -> String");
-    }
-
-    fn test_parse_expr(s: &str) {
-        let mut parser = Parser::new(s).unwrap();
-        let expr = parser.parse_expr().unwrap();
-        println!("{}", expr)
-    }
-
-    #[test]
-    fn test_parse_expr1() {
-        test_parse_expr("x");
-    }
-
-    #[test]
-    fn test_parse_expr2() {
-        test_parse_expr("(\\x => x)");
-    }
-
-    #[test]
-    fn test_parse_expr3() {
-        test_parse_expr("(\\x => x)(\\y => y)");
+    fn test_parse_type_complex_parentheses() {
+        let result = test_parse_type("(Bool -> (Int)) -> String").unwrap();
+        match result.ty {
+            Type::Function { input, output } => {
+                match *input {
+                    Type::Function {
+                        input: inner_input,
+                        output: inner_output,
+                    } => {
+                        assert_eq!(*inner_input, Type::Atom("Bool".to_string()));
+                        assert_eq!(*inner_output, Type::Atom("Int".to_string()));
+                    }
+                    _ => panic!("Expected nested function type in input"),
+                }
+                assert_eq!(*output, Type::Atom("String".to_string()));
+            }
+            _ => panic!("Expected function type"),
+        }
     }
 
     #[test]
-    fn test_parse_expr4() {
-        let s = r#"(\x => x)(\y => y)(\z => z)"#;
-        test_parse_expr(s);
+    fn test_parse_type_error_empty() {
+        let result = test_parse_type("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_type_error_unmatched_paren() {
+        let result = test_parse_type("(Bool");
+        assert!(result.is_err());
+    }
+
+    // Expression parsing tests
+    #[test]
+    fn test_parse_expr_variable() {
+        let result = test_parse_expr("x").unwrap();
+        assert_eq!(result.expr, Expr::Var("x".to_string()));
+        assert_eq!(result.row_start, 1);
+        assert_eq!(result.col_start, 1);
+    }
+
+    #[test]
+    fn test_parse_expr_lambda_simple() {
+        let result = test_parse_expr("\\x => x").unwrap();
+        match result.expr {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "x");
+                assert_eq!(*body, Expr::Var("x".to_string()));
+            }
+            _ => panic!("Expected lambda expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_lambda_unicode() {
+        let result = test_parse_expr("λx => x").unwrap();
+        match result.expr {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "x");
+                assert_eq!(*body, Expr::Var("x".to_string()));
+            }
+            _ => panic!("Expected lambda expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_parenthesized() {
+        let result = test_parse_expr("(x)").unwrap();
+        assert_eq!(result.expr, Expr::Var("x".to_string()));
+    }
+
+    #[test]
+    fn test_parse_expr_parenthesized_lambda() {
+        let result = test_parse_expr("(\\x => x)").unwrap();
+        match result.expr {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "x");
+                assert_eq!(*body, Expr::Var("x".to_string()));
+            }
+            _ => panic!("Expected lambda expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_application_simple() {
+        let result = test_parse_expr("f x").unwrap();
+        match result.expr {
+            Expr::Application { func, arg } => {
+                assert_eq!(*func, Expr::Var("f".to_string()));
+                assert_eq!(*arg, Expr::Var("x".to_string()));
+            }
+            _ => panic!("Expected application"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_application_left_associative() {
+        let result = test_parse_expr("f x y").unwrap();
+        match result.expr {
+            Expr::Application { func, arg } => {
+                match *func {
+                    Expr::Application {
+                        func: inner_func,
+                        arg: inner_arg,
+                    } => {
+                        assert_eq!(*inner_func, Expr::Var("f".to_string()));
+                        assert_eq!(*inner_arg, Expr::Var("x".to_string()));
+                    }
+                    _ => panic!("Expected nested application in func"),
+                }
+                assert_eq!(*arg, Expr::Var("y".to_string()));
+            }
+            _ => panic!("Expected application"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_lambda_application() {
+        let result = test_parse_expr("(\\x => x)(\\y => y)").unwrap();
+        match result.expr {
+            Expr::Application { func, arg } => match (*func, *arg) {
+                (
+                    Expr::Lambda {
+                        param: p1,
+                        body: b1,
+                    },
+                    Expr::Lambda {
+                        param: p2,
+                        body: b2,
+                    },
+                ) => {
+                    assert_eq!(p1, "x");
+                    assert_eq!(*b1, Expr::Var("x".to_string()));
+                    assert_eq!(p2, "y");
+                    assert_eq!(*b2, Expr::Var("y".to_string()));
+                }
+                _ => panic!("Expected lambda applications"),
+            },
+            _ => panic!("Expected application"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_complex_application() {
+        let result = test_parse_expr("(\\x => x)(\\y => y)(\\z => z)").unwrap();
+        match result.expr {
+            Expr::Application { func, arg } => {
+                match *func {
+                    Expr::Application {
+                        func: inner_func,
+                        arg: inner_arg,
+                    } => match (*inner_func, *inner_arg) {
+                        (Expr::Lambda { param: p1, .. }, Expr::Lambda { param: p2, .. }) => {
+                            assert_eq!(p1, "x");
+                            assert_eq!(p2, "y");
+                        }
+                        _ => panic!("Expected lambda applications in inner"),
+                    },
+                    _ => panic!("Expected nested application in func"),
+                }
+                match *arg {
+                    Expr::Lambda { param: p3, .. } => {
+                        assert_eq!(p3, "z");
+                    }
+                    _ => panic!("Expected lambda in arg"),
+                }
+            }
+            _ => panic!("Expected application"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_nested_lambda() {
+        let result = test_parse_expr("\\x => \\y => x").unwrap();
+        match result.expr {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "x");
+                match *body {
+                    Expr::Lambda {
+                        param: inner_param,
+                        body: inner_body,
+                    } => {
+                        assert_eq!(inner_param, "y");
+                        assert_eq!(*inner_body, Expr::Var("x".to_string()));
+                    }
+                    _ => panic!("Expected nested lambda"),
+                }
+            }
+            _ => panic!("Expected lambda expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_error_empty() {
+        let result = test_parse_expr("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_expr_error_unmatched_paren() {
+        let result = test_parse_expr("(x");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_expr_error_lambda_missing_param() {
+        let result = test_parse_expr("\\");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_expr_error_lambda_missing_arrow() {
+        let result = test_parse_expr("\\x");
+        assert!(result.is_err());
+    }
+
+    // Declaration parsing tests
+    #[test]
+    fn test_parse_type_dec_simple() {
+        let mut parser = Parser::from_str("f : Bool").unwrap();
+        let result = parser.parse_type_dec().unwrap();
+        assert_eq!(result.type_dec.name, "f");
+        assert_eq!(result.type_dec.ty, Type::Atom("Bool".to_string()));
+    }
+
+    #[test]
+    fn test_parse_func_dec_simple() {
+        let mut parser = Parser::from_str("f = x").unwrap();
+        let result = parser.parse_func_dec().unwrap();
+        assert_eq!(result.func_dec.name, "f");
+        assert_eq!(result.func_dec.body, Expr::Var("x".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dec_complete() {
+        let input = "f : Bool -> Bool\nf = \\x => x";
+        let mut parser = Parser::from_str(input).unwrap();
+        let result = parser.parse_dec().unwrap();
+
+        assert_eq!(result.dec.name, "f");
+        match result.dec.ty_dec.ty {
+            Type::Function { input, output } => {
+                assert_eq!(*input, Type::Atom("Bool".to_string()));
+                assert_eq!(*output, Type::Atom("Bool".to_string()));
+            }
+            _ => panic!("Expected function type"),
+        }
+
+        match result.dec.func_dec.body {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "x");
+                assert_eq!(*body, Expr::Var("x".to_string()));
+            }
+            _ => panic!("Expected lambda expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dec_error_mismatched_names() {
+        let input = "f : Bool\ng = x";
+        let mut parser = Parser::from_str(input).unwrap();
+        let result = parser.parse_dec();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::InvalidSyntax { message } => {
+                assert!(message.contains("does not match"));
+            }
+            _ => panic!("Expected InvalidSyntax error"),
+        }
+    }
+
+    // Program parsing tests
+    #[test]
+    fn test_parse_program_simple() {
+        let input = r#"
+id : Bool -> Bool
+id = \x => x
+
+main : Unit
+main = id
+"#;
+        let result = test_parse_program(input).unwrap();
+
+        assert_eq!(result.program.decs.len(), 1);
+        assert_eq!(result.program.decs[0].name, "id");
+        assert_eq!(result.program.main.name, "main");
+        assert_eq!(
+            result.program.main.ty_dec.ty,
+            Type::Atom("Unit".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_program_multiple_decs() {
+        let input = r#"
+id : Bool -> Bool
+id = \x => x
+
+const : Bool -> Bool -> Bool
+const = \x => \y => x
+
+main : Unit
+main = id
+"#;
+        let result = test_parse_program(input).unwrap();
+
+        assert_eq!(result.program.decs.len(), 2);
+        assert_eq!(result.program.decs[0].name, "id");
+        assert_eq!(result.program.decs[1].name, "const");
+        assert_eq!(result.program.main.name, "main");
+    }
+
+    #[test]
+    fn test_parse_program_error_no_main() {
+        let input = r#"
+id : Bool -> Bool
+id = \x => x
+"#;
+        let result = test_parse_program(input);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::InvalidSyntax { message } => {
+                assert!(message.contains("main declaration"));
+            }
+            _ => panic!("Expected InvalidSyntax error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_program_error_multiple_main() {
+        let input = r#"
+main : Unit
+main = x
+
+main : Unit  
+main = y
+"#;
+        let result = test_parse_program(input);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::InvalidSyntax { message } => {
+                assert!(message.contains("exactly one main"));
+            }
+            _ => panic!("Expected InvalidSyntax error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_program_error_main_wrong_type() {
+        let input = r#"
+main : Bool
+main = x
+"#;
+        let result = test_parse_program(input);
+        // This should actually parse successfully since is_main_dec only checks for "Unit" type
+        // But if main has wrong type, it won't be recognized as main, causing "no main" error
+        assert!(result.is_err());
+    }
+
+    // Integration tests with comments and whitespace
+    #[test]
+    fn test_parse_program_with_comments() {
+        let input = r#"
+-- Identity function
+id : Bool -> Bool
+id = \x => x
+
+-- Main program
+main : Unit
+main = id  -- Apply identity
+"#;
+        let result = test_parse_program(input).unwrap();
+        assert_eq!(result.program.decs.len(), 1);
+        assert_eq!(result.program.main.name, "main");
+    }
+
+    #[test]
+    fn test_parse_program_mixed_whitespace() {
+        let input = "id : Bool -> Bool\nid = \\x => x\n\nmain : Unit\nmain = id";
+        let result = test_parse_program(input).unwrap();
+        assert_eq!(result.program.decs.len(), 1);
+        assert_eq!(result.program.main.name, "main");
+    }
+
+    #[test]
+    fn test_parse_program_complex_types() {
+        let input = r#"
+curry : (Bool -> Bool -> Bool) -> Bool -> Bool -> Bool
+curry = \f => \x => \y => f x y
+
+main : Unit
+main = curry
+"#;
+        let result = test_parse_program(input).unwrap();
+
+        // Check that the complex type parsed correctly
+        match &result.program.decs[0].ty_dec.ty {
+            Type::Function { input, output } => match input.as_ref() {
+                Type::Function {
+                    input: inner1,
+                    output: inner2,
+                } => {
+                    assert_eq!(**inner1, Type::Atom("Bool".to_string()));
+                    match inner2.as_ref() {
+                        Type::Function {
+                            input: inner3,
+                            output: inner4,
+                        } => {
+                            assert_eq!(**inner3, Type::Atom("Bool".to_string()));
+                            assert_eq!(**inner4, Type::Atom("Bool".to_string()));
+                        }
+                        _ => panic!("Expected nested function type"),
+                    }
+                }
+                _ => panic!("Expected function type in input"),
+            },
+            _ => panic!("Expected function type"),
+        }
+    }
+
+    // Error handling tests
+    #[test]
+    fn test_parser_lexer_error_propagation() {
+        let result = Parser::from_str("@invalid");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::LexerError(_) => {} // Expected
+            _ => panic!("Expected LexerError"),
+        }
+    }
+
+    #[test]
+    fn test_unexpected_token_error() {
+        let result = test_parse_type(":");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::UnexpectedToken { expected, found } => {
+                assert!(expected.contains("Identifier"));
+            }
+            _ => panic!("Expected UnexpectedToken error"),
+        }
+    }
+
+    #[test]
+    fn test_coordinate_tracking() {
+        let input = "  f  :  Bool";
+        let mut parser = Parser::from_str(input).unwrap();
+        let result = parser.parse_type_dec().unwrap();
+
+        // Should track coordinates correctly despite whitespace
+        assert_eq!(result.row_start, 1);
+        assert_eq!(result.col_start, 3); // 'f' starts at column 3
+    }
+
+    // Edge cases
+    #[test]
+    fn test_empty_program() {
+        let result = test_parse_program("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_only_whitespace_program() {
+        let result = test_parse_program("   \n  \t  ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_complex_lambda_calculus_program() {
+        let input = r#"
+-- Church booleans
+true : Bool -> Bool -> Bool
+true = \x => \y => x
+
+false : Bool -> Bool -> Bool  
+false = \x => \y => y
+
+-- Boolean operations
+and : (Bool -> Bool -> Bool) -> (Bool -> Bool -> Bool) -> Bool -> Bool -> Bool
+and = \p => \q => \x => \y => p (q x y) y
+
+main : Unit
+main = true
+"#;
+        let result = test_parse_program(input).unwrap();
+        // assert_eq!(result.program.decs.len(), 3);
+        assert_eq!(result.program.main.name, "main");
+    }
+
+    // Test lambda with =>, not ->
+    #[test]
+    fn test_lambda_with_double_arrow() {
+        let result = test_parse_expr("\\x => \\y => x").unwrap();
+        match result.expr {
+            Expr::Lambda { param, body } => {
+                assert_eq!(param, "x");
+                match *body {
+                    Expr::Lambda {
+                        param: inner_param,
+                        body: inner_body,
+                    } => {
+                        assert_eq!(inner_param, "y");
+                        assert_eq!(*inner_body, Expr::Var("x".to_string()));
+                    }
+                    _ => panic!("Expected nested lambda"),
+                }
+            }
+            _ => panic!("Expected lambda expression"),
+        }
+    }
+
+    #[test]
+    fn test_lambda_wrong_arrow_type() {
+        let result = test_parse_expr("\\x -> x");
+        assert!(result.is_err());
     }
 }

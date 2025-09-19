@@ -53,7 +53,7 @@ pub struct CoordToken {
 
 impl fmt::Display for CoordToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} ({}, {})", self.token, self.row, self.size)
+        write!(f, "{} ({}, {})", self.token, self.row, self.col)
     }
 }
 
@@ -179,7 +179,7 @@ impl Lexer {
         if self.input.get(next_pos) == Some(&'-') {
             self.advance_many(2);
             while let Some(ch) = self.peek() {
-                if ch == '\n' {
+                if ch == '\n' { // todo: windows
                     break;
                 }
                 self.advance();
