@@ -27,7 +27,7 @@ pub struct Parser {
     position: usize,
 }
 
-enum ExprWraper {
+enum ExprWrap {
     Epsilon,
     Atom(Box<CoordExpr>), // for x, lambda x: Ty => e, (e)
     Application {
@@ -438,11 +438,11 @@ impl Parser {
     fn parse_expr(&mut self) -> Result<CoordExpr, ParseError> {
         let expr = self.parse_expr_wrapper()?;
         match expr {
-            ExprWraper::Epsilon => Err(ParseError::InvalidSyntax {
+            ExprWrap::Epsilon => Err(ParseError::InvalidSyntax {
                 message: "expects an expression".to_string(),
             }),
-            ExprWraper::Atom(e) => Ok(*e),
-            ExprWraper::Application { func, arg } => {
+            ExprWrap::Atom(e) => Ok(*e),
+            ExprWrap::Application { func, arg } => {
                 let row_start = func.row_start;
                 let col_start = func.col_start;
                 let row_end = arg.row_end;
@@ -464,7 +464,7 @@ impl Parser {
     }
 
     // ExprWrap := Var | λ Identifier => Expr | (Expr) | Epsilon
-    fn parse_expr_wrapper(&mut self) -> Result<ExprWraper, ParseError> {
+    fn parse_expr_wrapper(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
             None => Err(ParseError::InvalidSyntax {
@@ -482,12 +482,12 @@ impl Parser {
                 token: Token::LeftParen,
                 ..
             }) => Ok(self.parse_expr_paren()?),
-            _ => Ok(ExprWraper::Epsilon),
+            _ => Ok(ExprWrap::Epsilon),
         }
     }
 
     // Expr := Var {Expr'}
-    fn parse_expr_var(&mut self) -> Result<ExprWraper, ParseError> {
+    fn parse_expr_var(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
             None => Err(ParseError::InvalidSyntax {
@@ -513,19 +513,19 @@ impl Parser {
                 self.advance();
                 let peek = self.peek();
                 if peek.is_some() && peek.unwrap().col == 1 {
-                    Ok(ExprWraper::Atom(Box::new(expr)))
+                    Ok(ExprWrap::Atom(Box::new(expr)))
                 } else {
                     let next = self.parse_expr_wrapper()?;
                     match next {
-                        ExprWraper::Epsilon => Ok(ExprWraper::Atom(Box::new(expr))),
-                        ExprWraper::Atom(atom) => {
-                            let ew = ExprWraper::Application {
+                        ExprWrap::Epsilon => Ok(ExprWrap::Atom(Box::new(expr))),
+                        ExprWrap::Atom(atom) => {
+                            let ew = ExprWrap::Application {
                                 func: Box::new(expr),
                                 arg: atom,
                             };
                             Ok(ew)
                         }
-                        ExprWraper::Application { func, arg } => {
+                        ExprWrap::Application { func, arg } => {
                             let app1 = Expr::Application {
                                 func: Box::new(expr.expr),
                                 arg: Box::new(func.expr),
@@ -538,7 +538,7 @@ impl Parser {
                                 col_end: func.col_end,
                             };
 
-                            let ew = ExprWraper::Application {
+                            let ew = ExprWrap::Application {
                                 func: Box::new(coord_app1),
                                 arg: arg,
                             };
@@ -555,7 +555,7 @@ impl Parser {
     }
 
     // Expr := λ Identifier => Expr
-    fn parse_expr_lambda(&mut self) -> Result<ExprWraper, ParseError> {
+    fn parse_expr_lambda(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
             None => Err(ParseError::InvalidSyntax {
@@ -590,7 +590,7 @@ impl Parser {
                             row_end: body.row_end,
                             col_end: body.col_end,
                         };
-                        Ok(ExprWraper::Atom(Box::new(coord_lambda)))
+                        Ok(ExprWrap::Atom(Box::new(coord_lambda)))
                     }
                     _ => Err(ParseError::UnexpectedToken {
                         expected: "Identifier".to_string(),
@@ -606,7 +606,7 @@ impl Parser {
     }
 
     // Expr := (Expr) {Expr'}
-    fn parse_expr_paren(&mut self) -> Result<ExprWraper, ParseError> {
+    fn parse_expr_paren(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
             None => Err(ParseError::InvalidSyntax {
@@ -637,20 +637,20 @@ impl Parser {
 
                 let peek = self.peek();
                 if peek.is_some() && peek.unwrap().col == 1 {
-                    return Ok(ExprWraper::Atom(Box::new(expr)));
+                    return Ok(ExprWrap::Atom(Box::new(expr)));
                 }
                 let next = self.parse_expr_wrapper()?;
                 match next {
-                    ExprWraper::Epsilon => Ok(ExprWraper::Atom(Box::new(expr))),
+                    ExprWrap::Epsilon => Ok(ExprWrap::Atom(Box::new(expr))),
 
-                    ExprWraper::Atom(atom) => {
-                        let ew = ExprWraper::Application {
+                    ExprWrap::Atom(atom) => {
+                        let ew = ExprWrap::Application {
                             func: Box::new(expr),
                             arg: atom,
                         };
                         Ok(ew)
                     }
-                    ExprWraper::Application { func, arg } => {
+                    ExprWrap::Application { func, arg } => {
                         let app = Expr::Application {
                             func: Box::new(expr.expr),
                             arg: Box::new(func.expr),
@@ -662,7 +662,7 @@ impl Parser {
                             row_end: func.row_end,
                             col_end: func.col_end,
                         };
-                        let ew = ExprWraper::Application {
+                        let ew = ExprWrap::Application {
                             func: Box::new(coord_app),
                             arg: arg,
                         };
@@ -1265,11 +1265,21 @@ false = \x => \y => y
 and : (Bool -> Bool -> Bool) -> (Bool -> Bool -> Bool) -> Bool -> Bool -> Bool
 and = \p => \q => \x => \y => p (q x y) y
 
+-- Church numerals
+zero : (Bool -> Bool) -> Bool -> Bool
+zero = \f => \x => x
+one : (Bool -> Bool) -> Bool -> Bool
+one = \f => \x => f x
+two : (Bool -> Bool) -> Bool -> Bool
+two = \f => \x => f (f x)
+three : (Bool -> Bool) -> Bool -> Bool
+three = \f => \x => f (f (f x))
+
 main : Unit
-main = true
+main = unit
 "#;
         let result = test_parse_program(input).unwrap();
-        // assert_eq!(result.program.decs.len(), 3);
+        assert_eq!(result.program.decs.len(), 7);
         assert_eq!(result.program.main.name, "main");
     }
 
