@@ -41,7 +41,8 @@ pub enum Type {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    Var(String), // todo : should be Var
+    Var(String),
+    Bool(bool),
     Application { func: Box<Expr>, arg: Box<Expr> },
     Lambda { param: String, body: Box<Expr> },
 }
@@ -141,6 +142,7 @@ impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Expr::Var(s) => write!(f, "{s}"),
+            Expr::Bool(b) => write!(f, "{b}"),
             Expr::Application { func, arg } => write!(f, "({func} {arg})"),
             Expr::Lambda { param, body } => write!(f, "(λ{param} => {body})"),
         }

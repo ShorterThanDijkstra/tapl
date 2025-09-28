@@ -1,17 +1,17 @@
-use std::cmp::{max, min};
-use std::fs;
-use std::path::Path;
-
 use crate::lexer::{CoordToken, Lexer, LexerError, Token};
 use crate::syntax::{
     CoordDec, CoordExpr, CoordFuncDec, CoordProgram, CoordType, CoordTypeDec, Dec, Expr, FuncDec,
     Program, Type, TypeDec,
 };
+use std::cmp::{max, min};
+use std::fmt::Error;
+use std::fs;
+use std::path::Path;
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
     LexerError(LexerError),
-    UnexpectedToken { expected: String, found: String },
-    UnexpectedEof { expected: String },
+    UnexpectedToken { expected: Vec<Token>, found: Token },
+    UnexpectedEof { expected: Vec<Token> },
     InvalidSyntax { message: String },
 }
 
@@ -24,18 +24,124 @@ impl From<LexerError> for ParseError {
 #[derive(Debug)]
 pub struct Parser {
     tokens: Vec<CoordToken>,
+    eof: CoordToken,
     position: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 enum ExprWrap {
     Epsilon,
-    Atom(Box<CoordExpr>), // for x, lambda x: Ty => e, (e)
+    Var {
+        expr: Expr,
+        token: CoordToken,
+    },
+    Bool {
+        expr: Expr,
+        token: CoordToken,
+    },
+    Paren {
+        expr: Box<ExprWrap>,
+        fst_token: CoordToken,
+        last_token: CoordToken,
+    },
+    Lambda {
+        param: String,
+        body: Box<ExprWrap>,
+        fst_token: CoordToken,
+        last_token: CoordToken,
+    },
     Application {
-        func: Box<CoordExpr>,
-        arg: Box<CoordExpr>,
-    }, // for application
+        func: Box<ExprWrap>,
+        arg: Box<ExprWrap>,
+        fst_token: CoordToken,
+        last_token: CoordToken,
+    },
 }
 
+impl ExprWrap {
+    fn to_expr(&self) -> Option<CoordExpr> {
+        match self {
+            ExprWrap::Epsilon => None,
+            ExprWrap::Var { expr, token } => Some(CoordExpr {
+                expr: expr.clone(),
+                row_start: token.row,
+                col_start: token.col,
+                row_end: token.row,
+                col_end: token.col + token.size - 1,
+            }),
+            ExprWrap::Bool { expr, token } => Some(CoordExpr {
+                expr: expr.clone(),
+                row_start: token.row,
+                col_start: token.col,
+                row_end: token.row,
+                col_end: token.col + token.size - 1,
+            }),
+            ExprWrap::Paren {
+                expr,
+                fst_token,
+                last_token,
+            } => Some(CoordExpr {
+                expr: expr.to_expr().unwrap().expr,
+                row_start: fst_token.row,
+                col_start: fst_token.col,
+                row_end: last_token.row,
+                col_end: last_token.col + last_token.size - 1,
+            }),
+            ExprWrap::Lambda {
+                param,
+                body,
+                fst_token,
+                last_token,
+            } => Some(CoordExpr {
+                expr: Expr::Lambda {
+                    param: param.clone(),
+                    body: Box::new(body.to_expr().unwrap().expr),
+                },
+                row_start: fst_token.row,
+                col_start: fst_token.col,
+                row_end: last_token.row,
+                col_end: last_token.col + last_token.size - 1,
+            }),
+            ExprWrap::Application {
+                func,
+                arg,
+                fst_token,
+                last_token,
+            } => Some(CoordExpr {
+                expr: Expr::Application {
+                    func: Box::new(func.to_expr().unwrap().expr),
+                    arg: Box::new(arg.to_expr().unwrap().expr),
+                },
+                row_start: fst_token.row,
+                col_start: fst_token.col,
+                row_end: last_token.row,
+                col_end: last_token.col + last_token.size - 1,
+            }),
+        }
+    }
+
+    fn get_fst_token(&self) -> CoordToken {
+        match self {
+            ExprWrap::Epsilon => unreachable!(),
+            ExprWrap::Var { token, .. } => token.clone(),
+            ExprWrap::Bool { token, .. } => token.clone(),
+            ExprWrap::Paren { fst_token, .. } => fst_token.clone(),
+            ExprWrap::Lambda { fst_token, .. } => fst_token.clone(),
+            ExprWrap::Application { fst_token, .. } => fst_token.clone(),
+        }
+    }
+
+    fn get_last_token(&self) -> CoordToken {
+        match self {
+            ExprWrap::Epsilon => unreachable!(),
+            ExprWrap::Var { token, .. } => token.clone(),
+            ExprWrap::Bool { token, .. } => token.clone(),
+            ExprWrap::Paren { last_token, .. } => last_token.clone(),
+            ExprWrap::Lambda { last_token, .. } => last_token.clone(),
+            ExprWrap::Application { last_token, .. } => last_token.clone(),
+        }
+    }
+}
 impl Parser {
     pub fn from_file<P: AsRef<Path>>(file_path: P) -> Result<Self, ParseError> {
         let content = fs::read_to_string(file_path).map_err(|e| ParseError::InvalidSyntax {
@@ -43,54 +149,49 @@ impl Parser {
         })?;
         Self::from_str(&content)
     }
-    
+
     pub fn from_str(input: &str) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.tokenize()?;
-        Ok(Self {
-            tokens,
-            position: 0,
-        })
-    }
-
-    fn peek(&self) -> Option<&CoordToken> {
-        self.tokens.get(self.position)
-    }
-
-    fn advance(&mut self) -> Option<&CoordToken> {
-        let coord_token = self.tokens.get(self.position);
-        if coord_token.is_some() && !coord_token.unwrap().is_token(Token::EOF) {
-            self.position += 1;
-        }
-        coord_token
-    }
-
-    fn expect_token(&mut self, expected: Token) -> Result<&CoordToken, ParseError> {
-        let coord_token = self.advance().ok_or(ParseError::UnexpectedToken {
-            expected: expected.to_string(),
-            found: "EOF".to_string(),
-        })?;
-        if coord_token.is_token(expected.clone()) {
-            Ok(coord_token)
+        if let Some(eof) = tokens.clone().last() {
+            Ok(Self {
+                tokens,
+                eof: eof.clone(),
+                position: 0,
+            })
         } else {
-            Err(ParseError::UnexpectedToken {
-                expected: expected.to_string(),
-                found: coord_token.to_string(),
+            Err(ParseError::InvalidSyntax {
+                message: format!("no EOF found"),
             })
         }
     }
 
-    fn expect_identifier(&mut self) -> Result<&CoordToken, ParseError> {
-        let coord_token = self.advance().ok_or(ParseError::UnexpectedToken {
-            expected: Token::Identifier("?".to_string()).to_string(),
-            found: Token::EOF.to_string(),
-        })?;
-        match coord_token.token {
-            Token::Identifier(_) => Ok(&coord_token),
-            _ => Err(ParseError::UnexpectedToken {
-                expected: Token::Identifier("?".to_string()).to_string(),
-                found: coord_token.to_string(),
-            }),
+    fn peek(&self) -> CoordToken {
+        let peek = self.tokens.get(self.position);
+        match peek {
+            None => self.eof.clone(),
+            Some(t) => t.clone(),
+        }
+    }
+
+    fn advance(&mut self) {
+        let coord_token = self.tokens.get(self.position);
+        if coord_token.is_some() && !coord_token.unwrap().is_token(Token::EOF) {
+            self.position += 1;
+        }
+    }
+
+    fn expect_token(&mut self, expected: Token) -> Result<CoordToken, ParseError> {
+        let peek = self.peek();
+        if peek.is_token(expected.clone()) {
+            let res = peek.clone();
+            self.advance();
+            Ok(res)
+        } else {
+            Err(ParseError::UnexpectedToken {
+                expected: vec![expected],
+                found: peek.token.clone(),
+            })
         }
     }
 
@@ -98,26 +199,26 @@ impl Parser {
     pub fn parse_program(&mut self) -> Result<CoordProgram, ParseError> {
         let mut coord_decs = Vec::new();
         let mut main = None;
-        while let Some(token) = self.peek() {
+        loop {
+            let token = self.peek();
             if token.is_token(Token::EOF) {
                 break;
             }
             let coord_dec = self.parse_dec()?;
-            println!("{}", coord_dec);
             if !Self::is_main_dec(&coord_dec) {
                 coord_decs.push(coord_dec);
             } else if main.is_none() {
                 main = Some(coord_dec);
             } else {
                 return Err(ParseError::InvalidSyntax {
-                    message: "Program must contain at exactly one main declaration".to_string(),
+                    message: format!("Program must contain at exactly one main declaration"),
                 });
             }
         }
 
         if main.is_none() {
             return Err(ParseError::InvalidSyntax {
-                message: "Program must contain at exactly one main declaration".to_string(),
+                message: format!("Program must contain at exactly one main declaration"),
             });
         }
 
@@ -208,71 +309,78 @@ impl Parser {
 
     // TypeDec := Identifier : Type
     fn parse_type_dec(&mut self) -> Result<CoordTypeDec, ParseError> {
-        if let CoordToken {
-            token: Token::Identifier(name),
-            row,
-            col,
-            ..
-        } = self.expect_identifier()?
-        {
-            let name = name.clone();
-            let row_start = *row;
-            let col_start = *col;
-            self.expect_token(Token::Colon)?;
-            let coord_ty = self.parse_type()?;
-            let type_dec = TypeDec {
-                name,
-                ty: coord_ty.ty,
-            };
-            let row_end = coord_ty.row_end;
-            let col_end = coord_ty.col_end;
-            let coord_ty_dec = CoordTypeDec {
-                type_dec,
-                row_start,
-                col_start,
-                row_end,
-                col_end,
-            };
-            Ok(coord_ty_dec)
-        } else {
-            return Err(ParseError::InvalidSyntax {
-                message: "Type declaration expects identifier".to_string(),
-            });
+        let peek = self.peek();
+        match peek {
+            CoordToken {
+                token: Token::Identifier(name),
+                row,
+                col,
+                ..
+            } => {
+                let name = name.clone();
+                let row_start = row;
+                let col_start = col;
+                self.advance();
+                self.expect_token(Token::Colon)?;
+                let coord_ty = self.parse_type()?;
+                let type_dec = TypeDec {
+                    name,
+                    ty: coord_ty.ty,
+                };
+                let row_end = coord_ty.row_end;
+                let col_end = coord_ty.col_end;
+                let coord_ty_dec = CoordTypeDec {
+                    type_dec,
+                    row_start,
+                    col_start,
+                    row_end,
+                    col_end,
+                };
+                Ok(coord_ty_dec)
+            }
+            t => Err(ParseError::UnexpectedToken {
+                expected: vec![Token::Identifier("?".to_string())],
+                found: t.token.clone(),
+            }),
         }
     }
 
     // FuncDec := Identifier = Expr
     fn parse_func_dec(&mut self) -> Result<CoordFuncDec, ParseError> {
-        if let CoordToken {
-            token: Token::Identifier(name),
-            row,
-            col,
-            ..
-        } = self.expect_identifier()?
-        {
-            let name = name.clone();
-            let row_start = *row;
-            let col_start = *col;
-            self.expect_token(Token::Equals)?;
-            let body = self.parse_expr()?;
-            let func_dec = FuncDec {
-                name,
-                body: body.expr,
-            };
-            let row_end = body.row_end;
-            let col_end = body.col_end;
-            let coord_func_dec = CoordFuncDec {
-                func_dec,
-                row_start,
-                col_start,
-                row_end,
-                col_end,
-            };
-            Ok(coord_func_dec)
-        } else {
-            return Err(ParseError::InvalidSyntax {
-                message: "Type declaration expects identifier".to_string(),
-            });
+        let peek = self.peek();
+        match peek {
+            CoordToken {
+                token: Token::Identifier(name),
+                row,
+                col,
+                ..
+            } => {
+                let name = name.clone();
+                let row_start = row;
+                let col_start = col;
+                self.advance();
+                self.expect_token(Token::Equals)?;
+                let body = self.parse_expr()?;
+                let func_dec = FuncDec {
+                    name,
+                    body: body.expr,
+                };
+                let row_end = body.row_end;
+                let col_end = body.col_end;
+                let coord_func_dec = CoordFuncDec {
+                    func_dec,
+                    row_start,
+                    col_start,
+                    row_end,
+                    col_end,
+                };
+                Ok(coord_func_dec)
+            }
+            _ => {
+                return Err(ParseError::InvalidSyntax {
+                    message: format!("Type declaration expects identifier"),
+                });
+            }
         }
     }
 
@@ -281,38 +389,38 @@ impl Parser {
     fn parse_type(&mut self) -> Result<CoordType, ParseError> {
         let peek = self.peek();
         match peek {
-            None => Err(ParseError::InvalidSyntax {
-                message: "expects a token".to_string(),
+            // must be a type
+            CoordToken {
+                token: Token::EOF, ..
+            } => Err(ParseError::UnexpectedEof {
+                expected: vec![Token::Identifier(format!("?")), Token::LeftParen],
             }),
-            Some(CoordToken {
+            CoordToken {
                 token: Token::Identifier(_),
                 ..
-            }) => self.parse_type_ident(),
-            Some(CoordToken {
+            } => self.parse_type_atom(),
+            CoordToken {
                 token: Token::LeftParen,
                 ..
-            }) => self.parse_type_paren(),
+            } => self.parse_type_paren(),
             _ => self.parse_type_arrow(),
         }
     }
     // Type := ( Type ) [-> Type]
     fn parse_type_paren(&mut self) -> Result<CoordType, ParseError> {
         let CoordToken { row, col, .. } = self.expect_token(Token::LeftParen)?;
-        let row_start = *row;
-        let col_start = *col;
+        let row_start = row;
+        let col_start = col;
         let ty = self.parse_type()?;
         let CoordToken { row, col, size, .. } = self.expect_token(Token::RightParen)?;
-        let row_end = *row;
-        let col_end = *col + *size - 1;
+        let row_end = row;
+        let col_end = col + size - 1;
         let next = self.peek();
         match next {
-            None => Err(ParseError::InvalidSyntax {
-                message: "expects a token".to_string(),
-            }),
-            Some(CoordToken {
+            CoordToken {
                 token: Token::RightArrow,
                 ..
-            }) => {
+            } => {
                 let CoordType {
                     ty: right,
                     row_end: row_end1,
@@ -332,7 +440,7 @@ impl Parser {
                 };
                 Ok(coord_ty)
             }
-            Some(_) => {
+            _ => {
                 let coord_ty = CoordType {
                     ty: ty.ty,
                     row_start,
@@ -346,33 +454,32 @@ impl Parser {
     }
 
     // Type := Identifier [-> Type]
-    fn parse_type_ident(&mut self) -> Result<CoordType, ParseError> {
+    fn parse_type_atom(&mut self) -> Result<CoordType, ParseError> {
         let peek = self.peek();
         match peek {
-            None => Err(ParseError::InvalidSyntax {
-                message: "expects a token".to_string(),
+            // must be a type
+            CoordToken {
+                token: Token::EOF, ..
+            } => Err(ParseError::UnexpectedEof {
+                expected: vec![Token::Identifier("?".to_string())],
             }),
-            Some(CoordToken {
+            CoordToken {
                 token: Token::Identifier(name),
                 row,
                 col,
                 size,
-            }) => {
+            } => {
                 let name = name.clone();
-                let row_start = *row;
-                let col_start = *col;
-                let size = *size;
+                let row_start = row;
+                let col_start = col;
                 self.advance();
                 let ty = Type::Atom(name);
                 let next = self.peek();
                 match next {
-                    None => Err(ParseError::InvalidSyntax {
-                        message: "expects a token".to_string(),
-                    }),
-                    Some(CoordToken {
+                    CoordToken {
                         token: Token::RightArrow,
                         ..
-                    }) => {
+                    } => {
                         let CoordType {
                             ty: right,
                             row_end,
@@ -392,7 +499,7 @@ impl Parser {
                         };
                         Ok(coord_ty)
                     }
-                    Some(_) => {
+                    _ => {
                         let coord_ty = CoordType {
                             ty,
                             row_start,
@@ -405,9 +512,9 @@ impl Parser {
                     }
                 }
             }
-            Some(t) => Err(ParseError::UnexpectedToken {
-                expected: "Identifier".to_string(),
-                found: t.to_string(),
+            t => Err(ParseError::UnexpectedToken {
+                expected: vec![Token::Identifier("?".to_string())],
+                found: t.token.clone(),
             }),
         }
     }
@@ -416,264 +523,216 @@ impl Parser {
     fn parse_type_arrow(&mut self) -> Result<CoordType, ParseError> {
         let peek = self.peek();
         match peek {
-            None => Err(ParseError::InvalidSyntax {
-                message: "expects a token".to_string(),
+            // must be a type
+            CoordToken {
+                token: Token::EOF, ..
+            } => Err(ParseError::UnexpectedEof {
+                expected: vec![Token::RightArrow],
             }),
-            Some(CoordToken {
+            CoordToken {
                 token: Token::RightArrow,
                 ..
-            }) => {
+            } => {
                 self.advance();
                 let ty = self.parse_type()?;
                 Ok(ty)
             }
-            Some(t) => Err(ParseError::UnexpectedToken {
-                expected: "Identifier".to_string(),
-                found: t.to_string(),
+            t => Err(ParseError::UnexpectedToken {
+                expected: vec![Token::Identifier("?".to_string())],
+                found: t.token.clone(),
             }),
         }
     }
 
-    // Expr := Var | λ Identifier => Expr | (Expr) | Expr Expr
+    // Expr := Var | Bool | λ Identifier => Expr | (Expr) | Expr Expr
     fn parse_expr(&mut self) -> Result<CoordExpr, ParseError> {
-        let expr = self.parse_expr_wrapper()?;
+        let wrap = self.parse_expr_wrap()?;
+        let expr = wrap.to_expr();
         match expr {
-            ExprWrap::Epsilon => Err(ParseError::InvalidSyntax {
-                message: "expects an expression".to_string(),
+            Some(coord) => Ok(coord),
+            None => Err(ParseError::InvalidSyntax {
+                message: format!("expects an expression"),
             }),
-            ExprWrap::Atom(e) => Ok(*e),
-            ExprWrap::Application { func, arg } => {
-                let row_start = func.row_start;
-                let col_start = func.col_start;
-                let row_end = arg.row_end;
-                let col_end = arg.col_end;
-                let expr = Expr::Application {
-                    func: Box::new(func.expr),
-                    arg: Box::new(arg.expr),
-                };
-                let coord_expr = CoordExpr {
-                    expr,
-                    row_start,
-                    col_start,
-                    row_end,
-                    col_end,
-                };
-                Ok(coord_expr)
-            }
         }
     }
 
-    // ExprWrap := Var | λ Identifier => Expr | (Expr) | Epsilon
-    fn parse_expr_wrapper(&mut self) -> Result<ExprWrap, ParseError> {
+    // ExprWrap := Var | Bool | λ Identifier => ExprWrap | (ExprWrap) | ExprWrap ExprWrap | Epsilon
+    fn parse_expr_wrap(&mut self) -> Result<ExprWrap, ParseError> {
+        self.parse_expr_wrap_app()
+    }
+
+    // ExprWrap := ExprWrap ExprWrap
+    fn parse_expr_wrap_app(&mut self) -> Result<ExprWrap, ParseError> {
+        let fst_token = self.peek();
+        let mut atom = self.parse_expr_wrap_atom()?;
+        if ExprWrap::Epsilon == atom {
+            return Ok(ExprWrap::Epsilon);
+        }
+        loop {
+            let CoordToken{col,..} = self.peek();
+            if col == 1 {
+                return Ok(atom);
+            }
+            let next = self.parse_expr_wrap_atom()?;
+            if ExprWrap::Epsilon == next {
+                return Ok(atom);
+            }
+           
+            let last_token = next.get_last_token();
+            atom = ExprWrap::Application {
+                func: Box::new(atom),
+                arg: Box::new(next),
+                fst_token: fst_token.clone(),
+                last_token,
+            };
+        }
+    }
+    // ExprWrap := Var | Bool | λ Identifier => ExprWrap | (ExprWrap) | Epsilon
+    fn parse_expr_wrap_atom(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
-            None => Err(ParseError::InvalidSyntax {
-                message: "expects an expression".to_string(),
-            }),
-            Some(CoordToken {
+            CoordToken {
                 token: Token::Identifier(_),
                 ..
-            }) => Ok(self.parse_expr_var()?),
-            Some(CoordToken {
+            } => Ok(self.parse_expr_wrap_var()?),
+
+            CoordToken {
+                token: Token::BooleanLiteral(_),
+                ..
+            } => Ok(self.parse_expr_wrap_bool()?),
+
+            CoordToken {
                 token: Token::Lambda,
                 ..
-            }) => Ok(self.parse_expr_lambda()?),
-            Some(CoordToken {
+            } => Ok(self.parse_expr_wrap_lambda()?),
+
+            CoordToken {
                 token: Token::LeftParen,
                 ..
-            }) => Ok(self.parse_expr_paren()?),
+            } => Ok(self.parse_expr_wrap_paren()?),
+
             _ => Ok(ExprWrap::Epsilon),
         }
     }
 
-    // Expr := Var {Expr'}
-    fn parse_expr_var(&mut self) -> Result<ExprWrap, ParseError> {
+    // ExprWrap := Var | Epsilon
+    fn parse_expr_wrap_var(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
-            None => Err(ParseError::InvalidSyntax {
-                message: "expects an expression".to_string(),
-            }),
-            Some(CoordToken {
+            CoordToken {
                 token: Token::Identifier(name),
                 row,
                 col,
                 size,
-            }) => {
-                let row_start = *row;
-                let col_start = *col;
-                let size = *size;
-                let expr = CoordExpr {
-                    expr: Expr::Var(name.clone()),
-                    row_start,
-                    col_start,
-                    row_end: row_start,
-                    col_end: col_start + size - 1,
-                };
-
+            } => {
                 self.advance();
-                let peek = self.peek();
-                if peek.is_some() && peek.unwrap().col == 1 {
-                    Ok(ExprWrap::Atom(Box::new(expr)))
-                } else {
-                    let next = self.parse_expr_wrapper()?;
-                    match next {
-                        ExprWrap::Epsilon => Ok(ExprWrap::Atom(Box::new(expr))),
-                        ExprWrap::Atom(atom) => {
-                            let ew = ExprWrap::Application {
-                                func: Box::new(expr),
-                                arg: atom,
-                            };
-                            Ok(ew)
-                        }
-                        ExprWrap::Application { func, arg } => {
-                            let app1 = Expr::Application {
-                                func: Box::new(expr.expr),
-                                arg: Box::new(func.expr),
-                            };
-                            let coord_app1 = CoordExpr {
-                                expr: app1,
-                                row_start: expr.row_start,
-                                col_start: expr.col_start,
-                                row_end: func.row_end,
-                                col_end: func.col_end,
-                            };
-
-                            let ew = ExprWrap::Application {
-                                func: Box::new(coord_app1),
-                                arg: arg,
-                            };
-                            Ok(ew)
-                        }
-                    }
-                }
+                let expr = Expr::Var(name.clone());
+                let token = CoordToken {
+                    token: Token::Identifier(name.clone()),
+                    row,
+                    col,
+                    size,
+                };
+                let wrap = ExprWrap::Var { expr, token };
+                Ok(wrap)
             }
-            Some(t) => Err(ParseError::UnexpectedToken {
-                expected: "Identifier".to_string(),
-                found: t.to_string(),
-            }),
+            _ => Ok(ExprWrap::Epsilon),
         }
     }
 
-    // Expr := λ Identifier => Expr
-    fn parse_expr_lambda(&mut self) -> Result<ExprWrap, ParseError> {
+    // ExprWrap := Bool | Epsilon
+    fn parse_expr_wrap_bool(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
-            None => Err(ParseError::InvalidSyntax {
-                message: "expects Lambda".to_string(),
-            }),
-            Some(CoordToken {
+            CoordToken {
+                token: Token::BooleanLiteral(b),
+                row,
+                col,
+                size,
+            } => {
+                self.advance();
+                let expr = Expr::Bool(b);
+                let token = CoordToken {
+                    token: Token::BooleanLiteral(b),
+                    row,
+                    col,
+                    size,
+                };
+                let wrap = ExprWrap::Bool { expr, token };
+                Ok(wrap)
+            }
+            _ => Ok(ExprWrap::Epsilon),
+        }
+    }
+
+    // ExprWrap := λ Identifier => ExprWrap
+    fn parse_expr_wrap_lambda(&mut self) -> Result<ExprWrap, ParseError> {
+        let peek = self.peek();
+        match peek {
+            CoordToken {
                 token: Token::Lambda,
                 row,
                 col,
                 ..
-            }) => {
-                let row_start = *row;
-                let col_start = *col;
+            } => {
+                let fst_token = CoordToken {
+                    token: Token::Lambda,
+                    row,
+                    col,
+                    size: 1,
+                };
                 self.advance();
-                let ident = self.expect_identifier()?;
-                match ident {
+                let peek = self.peek();
+                let param = match peek {
                     CoordToken {
                         token: Token::Identifier(name),
                         ..
                     } => {
-                        let name = name.clone();
-                        self.expect_token(Token::RightArrowDouble)?;
-                        let body = self.parse_expr()?;
-                        let lambda = Expr::Lambda {
-                            param: name,
-                            body: Box::new(body.expr),
-                        };
-                        let coord_lambda = CoordExpr {
-                            expr: lambda,
-                            row_start,
-                            col_start,
-                            row_end: body.row_end,
-                            col_end: body.col_end,
-                        };
-                        Ok(ExprWrap::Atom(Box::new(coord_lambda)))
+                        self.advance();
+                        name
                     }
-                    _ => Err(ParseError::UnexpectedToken {
-                        expected: "Identifier".to_string(),
-                        found: ident.to_string(),
-                    }),
-                }
+                    _ => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: vec![Token::Identifier("".to_string())],
+                            found: peek.token.clone(),
+                        });
+                    }
+                };
+
+                self.expect_token(Token::RightArrowDouble)?;
+                let body = self.parse_expr_wrap()?;
+                let last_token = body.get_last_token();
+                let wrap = ExprWrap::Lambda {
+                    param,
+                    body: Box::new(body),
+                    fst_token,
+                    last_token,
+                };
+                Ok(wrap)
             }
-            Some(t) => Err(ParseError::UnexpectedToken {
-                expected: Token::Identifier("?".to_string()).to_string(),
-                found: t.to_string(),
-            }),
+            _ => Ok(ExprWrap::Epsilon),
         }
     }
 
-    // Expr := (Expr) {Expr'}
-    fn parse_expr_paren(&mut self) -> Result<ExprWrap, ParseError> {
+    // ExprWrap := (ExprWrap) | Epsilon
+    fn parse_expr_wrap_paren(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
-            None => Err(ParseError::InvalidSyntax {
-                message: "expects LeftParen".to_string(),
-            }),
-            Some(CoordToken {
+            CoordToken {
                 token: Token::LeftParen,
-                row,
-                col,
                 ..
-            }) => {
-                let row_start = *row;
-                let col_start = *col;
+            } => {
                 self.advance();
-                let mut expr = self.parse_expr()?;
-                let CoordToken {
-                    row: row1,
-                    col: col1,
-                    size,
-                    ..
-                } = self.expect_token(Token::RightParen)?;
-                let row_end = *row1;
-                let col_end = *col1 + *size - 1;
-                expr.row_start = row_start;
-                expr.col_start = col_start;
-                expr.row_end = row_end;
-                expr.col_end = col_end;
-
-                let peek = self.peek();
-                if peek.is_some() && peek.unwrap().col == 1 {
-                    return Ok(ExprWrap::Atom(Box::new(expr)));
+                let expr = self.parse_expr_wrap()?;
+                self.expect_token(Token::RightParen)?;
+                if ExprWrap::Epsilon == expr {
+                    return Err(ParseError::InvalidSyntax {
+                        message: format!("expects an expression"),
+                    });
                 }
-                let next = self.parse_expr_wrapper()?;
-                match next {
-                    ExprWrap::Epsilon => Ok(ExprWrap::Atom(Box::new(expr))),
-
-                    ExprWrap::Atom(atom) => {
-                        let ew = ExprWrap::Application {
-                            func: Box::new(expr),
-                            arg: atom,
-                        };
-                        Ok(ew)
-                    }
-                    ExprWrap::Application { func, arg } => {
-                        let app = Expr::Application {
-                            func: Box::new(expr.expr),
-                            arg: Box::new(func.expr),
-                        };
-                        let coord_app = CoordExpr {
-                            expr: app,
-                            row_start: expr.row_start,
-                            col_start: expr.col_start,
-                            row_end: func.row_end,
-                            col_end: func.col_end,
-                        };
-                        let ew = ExprWrap::Application {
-                            func: Box::new(coord_app),
-                            arg: arg,
-                        };
-                        Ok(ew)
-                    }
-                }
+                Ok(expr)
             }
-            Some(t) => Err(ParseError::UnexpectedToken {
-                expected: Token::Lambda.to_string(),
-                found: t.to_string(),
-            }),
+            _ => Ok(ExprWrap::Epsilon),
         }
     }
 }
@@ -681,6 +740,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lexer::*;
     use crate::syntax::*;
 
     // Helper function to create a parser and test type parsing
@@ -1221,7 +1281,9 @@ main = curry
         assert!(result.is_err());
         match result.unwrap_err() {
             ParseError::UnexpectedToken { expected, found } => {
-                assert!(expected.contains("Identifier"));
+                assert_eq!(found, Token::Colon);
+                // expected should contain Identifier
+                assert!(expected.into_iter().any(|t| t.is_identifier()));
             }
             _ => panic!("Expected UnexpectedToken error"),
         }
@@ -1251,6 +1313,19 @@ main = curry
         assert!(result.is_err());
     }
 
+    #[test]
+    fn delete() {
+        let input = r#"
+zero : (Bool -> Bool) -> Bool -> Bool
+zero = \x => x
+--zero = \f => \x => f (f x) 
+
+main : Unit
+main = unit
+        "#;
+
+        let result = test_parse_program(input).unwrap();
+    }
     #[test]
     fn test_complex_lambda_calculus_program() {
         let input = r#"

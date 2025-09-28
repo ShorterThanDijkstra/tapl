@@ -1,8 +1,8 @@
-use std::fmt::{self, write};
+use std::fmt::{self};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Identifier(String),
-    // BooleanLiteral(bool),
+    BooleanLiteral(bool),
     Colon,            // :
     RightArrow,       // ->
     Equals,           // =
@@ -13,9 +13,11 @@ pub enum Token {
     EOF,
 }
 impl Token {
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         match self {
             Token::Identifier(s) => s.len(),
+            Token::BooleanLiteral(true) => 4,
+            Token::BooleanLiteral(false) => 5,
             Token::Colon => 1,
             Token::RightArrow => 2,
             Token::Equals => 1,
@@ -26,11 +28,16 @@ impl Token {
             Token::EOF => 0,
         }
     }
+    pub fn is_identifier(&self) -> bool {
+        matches!(self, Token::Identifier(_))
+    }
 }
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Identifier(str) => write!(f, "{}", str),
+            Self::BooleanLiteral(true) => write!(f, "True"),
+            Self::BooleanLiteral(false) => write!(f, "False"),
             Self::Colon => write!(f, ":"),
             Self::RightArrow => write!(f, "->"),
             Self::Equals => write!(f, "="),
@@ -109,37 +116,18 @@ impl Lexer {
     }
 
     fn advance(&mut self) {
-        match std::env::consts::OS {
-            "windows" => {
-                // \r\n
-                match self.peek_many(2) {
-                    Some(peek2) => {
-                        if peek2 == "\r\n" {
-                            self.position += 2;
-                            self.newline();
-                        } else {
-                            self.position += 1;
-                            self.col +=1;
-                        }
-                    }
-                    None => {}
+        // \n
+        match self.peek() {
+            Some(peek) => {
+                if peek == '\n' {
+                    self.position += 1;
+                    self.newline();
+                } else {
+                    self.position += 1;
+                    self.col += 1;
                 }
             }
-            _ => {
-                // \n
-                match self.peek() {
-                    Some(peek) => {
-                        if peek == '\n' {
-                            self.position += 1;
-                            self.newline();
-                        } else {
-                            self.position += 1;
-                            self.col += 1;
-                        }
-                    }
-                    None => {}
-                }
-            }
+            None => {}
         }
     }
     fn newline(&mut self) {
@@ -156,7 +144,7 @@ impl Lexer {
     }
 
     fn advance_many(&mut self, n: usize) {
-        for _ in 0..n  {
+        for _ in 0..n {
             self.advance();
         }
     }
@@ -179,7 +167,7 @@ impl Lexer {
         if self.input.get(next_pos) == Some(&'-') {
             self.advance_many(2);
             while let Some(ch) = self.peek() {
-                if ch == '\n' { // todo: windows
+                if ch == '\n' {
                     break;
                 }
                 self.advance();
@@ -288,8 +276,8 @@ impl Lexer {
                     let col = self.col;
                     let identifier = self.read_identifier().expect("error: next_token");
                     let token = match identifier.as_str() {
-                        // "True" => Token::BooleanLiteral(true),
-                        // "False" => Token::BooleanLiteral(false),
+                        "True" => Token::BooleanLiteral(true),
+                        "False" => Token::BooleanLiteral(false),
                         _ => Token::Identifier(identifier),
                     };
                     let coord_token = self.wrap_token_row_col(token, row, col);
@@ -381,17 +369,26 @@ mod tests {
         }
     }
 
-    /*
-      #[test]
-      fn test_boolean_literals() {
+    #[test]
+    fn test_boolean_literals() {
         let mut lexer = Lexer::new("True");
-        assert_eq!(lexer.next_token().unwrap(), Token::BooleanLiteral(true));
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
+        assert!(
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::BooleanLiteral(true))
+        );
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
 
         let mut lexer = Lexer::new("False");
-        assert_eq!(lexer.next_token().unwrap(), Token::BooleanLiteral(false));
-        assert_eq!(lexer.next_token().unwrap(), Token::EOF);
-    } */
+        assert!(
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::BooleanLiteral(false))
+        );
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
+    }
     #[test]
     fn test_comments() {
         let mut lexer = Lexer::new("-- this is a comment\nx");
@@ -469,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn test_complex_expression() {
+    fn test_complex() {
         let mut lexer = Lexer::new("(λx -> (λy -> x)) True False");
         let expected = vec![
             Token::LeftParen,
@@ -483,10 +480,8 @@ mod tests {
             Token::Identifier("x".to_string()),
             Token::RightParen,
             Token::RightParen,
-            Token::Identifier("True".to_string()),
-            Token::Identifier("False".to_string()),
-            // Token::BooleanLiteral(true),
-            // Token::BooleanLiteral(false),
+            Token::BooleanLiteral(true),
+            Token::BooleanLiteral(false),
             Token::EOF,
         ];
 
