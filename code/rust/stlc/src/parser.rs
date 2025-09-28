@@ -4,7 +4,6 @@ use crate::syntax::{
     Program, Type, TypeDec,
 };
 use std::cmp::{max, min};
-use std::fmt::Error;
 use std::fs;
 use std::path::Path;
 #[derive(Debug, PartialEq)]
@@ -28,6 +27,73 @@ pub struct Parser {
     position: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum TypeWrap {
+    Epsilon,
+    Prim {
+        ty: Type,
+        token: CoordToken,
+    },
+    Paren {
+        ty: Box<TypeWrap>,
+        fst_token: CoordToken,
+        last_token: CoordToken,
+    },
+    Function {
+        input: Box<TypeWrap>,
+        output: Box<TypeWrap>,
+        fst_token: CoordToken,
+        last_token: CoordToken,
+    },
+}
+impl TypeWrap {
+    fn to_type(&self) -> Option<CoordType> {
+        match self {
+            TypeWrap::Epsilon => None,
+            TypeWrap::Prim { ty, token } => Some(CoordType {
+                ty: ty.clone(),
+                row_start: token.row,
+                col_start: token.col,
+                row_end: token.row,
+                col_end: token.col + token.size - 1,
+            }),
+            TypeWrap::Paren {
+                ty,
+                fst_token,
+                last_token,
+            } => Some(CoordType {
+                ty: ty.to_type().unwrap().ty,
+                row_start: fst_token.row,
+                col_start: fst_token.col,
+                row_end: last_token.row,
+                col_end: last_token.col + last_token.size - 1,
+            }),
+            TypeWrap::Function {
+                input,
+                output,
+                fst_token,
+                last_token,
+            } => Some(CoordType {
+                ty: Type::Function {
+                    input: Box::new(input.to_type().unwrap().ty),
+                    output: Box::new(output.to_type().unwrap().ty),
+                },
+                row_start: fst_token.row,
+                col_start: fst_token.col,
+                row_end: last_token.row,
+                col_end: last_token.col + last_token.size - 1,
+            }),
+        }
+    }
+    fn get_last_token(&self) -> CoordToken {
+        match self {
+            TypeWrap::Epsilon => unreachable!(),
+            TypeWrap::Prim { token, .. } => token.clone(),
+            TypeWrap::Paren { last_token, .. } => last_token.clone(),
+            TypeWrap::Function { last_token, .. } => last_token.clone(),
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 enum ExprWrap {
     Epsilon,
@@ -120,17 +186,6 @@ impl ExprWrap {
         }
     }
 
-    fn get_fst_token(&self) -> CoordToken {
-        match self {
-            ExprWrap::Epsilon => unreachable!(),
-            ExprWrap::Var { token, .. } => token.clone(),
-            ExprWrap::Bool { token, .. } => token.clone(),
-            ExprWrap::Paren { fst_token, .. } => fst_token.clone(),
-            ExprWrap::Lambda { fst_token, .. } => fst_token.clone(),
-            ExprWrap::Application { fst_token, .. } => fst_token.clone(),
-        }
-    }
-
     fn get_last_token(&self) -> CoordToken {
         match self {
             ExprWrap::Epsilon => unreachable!(),
@@ -175,10 +230,7 @@ impl Parser {
     }
 
     fn advance(&mut self) {
-        let coord_token = self.tokens.get(self.position);
-        if coord_token.is_some() && !coord_token.unwrap().is_token(Token::EOF) {
-            self.position += 1;
-        }
+        self.position += 1;
     }
 
     fn expect_token(&mut self, expected: Token) -> Result<CoordToken, ParseError> {
@@ -255,7 +307,7 @@ impl Parser {
 
     fn is_main_dec(coord_dec: &CoordDec) -> bool {
         let dec = coord_dec.dec.clone();
-        return dec.name == "main" && dec.ty_dec.ty == Type::Atom("Unit".to_string());
+        return dec.name == "main" && dec.ty_dec.ty == Type::Prim("Unit".to_string());
     }
 
     // Dec := TypeDec "\n" FuncDec
@@ -387,160 +439,117 @@ impl Parser {
     // Type := Identifier | (Type) | Type -> Type
     // Right-associative: A -> B -> C is A -> (B -> C)
     fn parse_type(&mut self) -> Result<CoordType, ParseError> {
-        let peek = self.peek();
-        match peek {
-            // must be a type
-            CoordToken {
-                token: Token::EOF, ..
-            } => Err(ParseError::UnexpectedEof {
-                expected: vec![Token::Identifier(format!("?")), Token::LeftParen],
+        let wrap = self.parse_type_wrap()?;
+        let ty = wrap.to_type();
+        match ty {
+            Some(coord) => Ok(coord),
+            None => Err(ParseError::InvalidSyntax {
+                message: format!("expects a type"),
             }),
-            CoordToken {
-                token: Token::Identifier(_),
-                ..
-            } => self.parse_type_atom(),
-            CoordToken {
-                token: Token::LeftParen,
-                ..
-            } => self.parse_type_paren(),
-            _ => self.parse_type_arrow(),
         }
     }
-    // Type := ( Type ) [-> Type]
-    fn parse_type_paren(&mut self) -> Result<CoordType, ParseError> {
-        let CoordToken { row, col, .. } = self.expect_token(Token::LeftParen)?;
-        let row_start = row;
-        let col_start = col;
-        let ty = self.parse_type()?;
-        let CoordToken { row, col, size, .. } = self.expect_token(Token::RightParen)?;
-        let row_end = row;
-        let col_end = col + size - 1;
-        let next = self.peek();
-        match next {
-            CoordToken {
-                token: Token::RightArrow,
-                ..
-            } => {
-                let CoordType {
-                    ty: right,
-                    row_end: row_end1,
-                    col_end: col_end1,
-                    ..
-                } = self.parse_type_arrow()?;
-                let ty = Type::Function {
-                    input: Box::new(ty.ty),
-                    output: Box::new(right),
-                };
-                let coord_ty = CoordType {
-                    ty,
-                    row_start,
-                    col_start,
-                    row_end: row_end1,
-                    col_end: col_end1,
-                };
-                Ok(coord_ty)
+
+    // TypeWrap := Identifier | (TypeWrap) | TypeWrap -> TypeWrap | Epsilon
+    fn parse_type_wrap(&mut self) -> Result<TypeWrap, ParseError> {
+        self.parse_type_wrap_arrow()
+    }
+
+    // TypeWrap := TypeWrap -> TypeWrap | Epsilon
+    fn parse_type_wrap_arrow(&mut self) -> Result<TypeWrap, ParseError> {
+        let fst_token = self.peek();
+        let mut atom = self.parse_type_wrap_atom()?;
+        if TypeWrap::Epsilon == atom {
+            return Ok(TypeWrap::Epsilon);
+        }
+        loop {
+            let coord = self.peek();
+            if coord.col == 1 {
+                return Ok(atom);
             }
-            _ => {
-                let coord_ty = CoordType {
-                    ty: ty.ty,
-                    row_start,
-                    col_start,
-                    row_end,
-                    col_end,
-                };
-                Ok(coord_ty)
+            if !coord.is_token(Token::RightArrow) {
+                return Ok(atom);
+            }
+            self.advance();
+            let rest = self.parse_type_wrap_arrow()?;
+            if TypeWrap::Epsilon == rest {
+                return Ok(atom);
+            }
+
+            let last_token = rest.get_last_token();
+            atom = TypeWrap::Function {
+                input: Box::new(atom),
+                output: Box::new(rest),
+                fst_token: fst_token.clone(),
+                last_token: last_token,
             }
         }
     }
 
-    // Type := Identifier [-> Type]
-    fn parse_type_atom(&mut self) -> Result<CoordType, ParseError> {
+    // TypeWrap := Identifier | (TypeWrap) | Epsilon
+    fn parse_type_wrap_atom(&mut self) -> Result<TypeWrap, ParseError> {
         let peek = self.peek();
         match peek {
-            // must be a type
             CoordToken {
-                token: Token::EOF, ..
-            } => Err(ParseError::UnexpectedEof {
-                expected: vec![Token::Identifier("?".to_string())],
-            }),
+                token: Token::Identifier(_),
+                ..
+            } => self.parse_type_wrap_prim(),
+            CoordToken {
+                token: Token::LeftParen,
+                ..
+            } => self.parse_type_wrap_paren(),
+            _ => Ok(TypeWrap::Epsilon),
+        }
+    }
+
+    // TypeWrap := Identifier | Epsilon
+    fn parse_type_wrap_prim(&mut self) -> Result<TypeWrap, ParseError> {
+        let peek = self.peek();
+        match peek {
             CoordToken {
                 token: Token::Identifier(name),
                 row,
                 col,
                 size,
             } => {
-                let name = name.clone();
-                let row_start = row;
-                let col_start = col;
                 self.advance();
-                let ty = Type::Atom(name);
-                let next = self.peek();
-                match next {
-                    CoordToken {
-                        token: Token::RightArrow,
-                        ..
-                    } => {
-                        let CoordType {
-                            ty: right,
-                            row_end,
-                            col_end,
-                            ..
-                        } = self.parse_type_arrow()?;
-                        let ty = Type::Function {
-                            input: Box::new(ty),
-                            output: Box::new(right),
-                        };
-                        let coord_ty = CoordType {
-                            ty,
-                            row_start,
-                            col_start,
-                            row_end: row_end,
-                            col_end: col_end,
-                        };
-                        Ok(coord_ty)
-                    }
-                    _ => {
-                        let coord_ty = CoordType {
-                            ty,
-                            row_start,
-                            col_start,
-                            row_end: row_start,
-                            col_end: col_start + size - 1,
-                        };
-
-                        Ok(coord_ty)
-                    }
-                }
+                let ty = Type::Prim(name.clone());
+                let token = CoordToken {
+                    token: Token::Identifier(name.clone()),
+                    row,
+                    col,
+                    size,
+                };
+                let wrap = TypeWrap::Prim { ty: ty, token };
+                Ok(wrap)
             }
-            t => Err(ParseError::UnexpectedToken {
-                expected: vec![Token::Identifier("?".to_string())],
-                found: t.token.clone(),
-            }),
+            _ => Ok(TypeWrap::Epsilon),
         }
     }
 
-    // Type := -> Type
-    fn parse_type_arrow(&mut self) -> Result<CoordType, ParseError> {
+    // TypeWrap := (TypeWrap) | Epsilon
+    fn parse_type_wrap_paren(&mut self) -> Result<TypeWrap, ParseError> {
         let peek = self.peek();
         match peek {
-            // must be a type
             CoordToken {
-                token: Token::EOF, ..
-            } => Err(ParseError::UnexpectedEof {
-                expected: vec![Token::RightArrow],
-            }),
-            CoordToken {
-                token: Token::RightArrow,
+                token: Token::LeftParen,
                 ..
             } => {
+                let fst_token = self.peek();
                 self.advance();
-                let ty = self.parse_type()?;
-                Ok(ty)
+                let ty = self.parse_type_wrap()?;
+                let last_token = self.expect_token(Token::RightParen)?;
+                if TypeWrap::Epsilon == ty {
+                    return Err(ParseError::InvalidSyntax {
+                        message: format!("expects an type"),
+                    });
+                }
+                Ok(TypeWrap::Paren {
+                    ty: Box::new(ty),
+                    fst_token,
+                    last_token,
+                })
             }
-            t => Err(ParseError::UnexpectedToken {
-                expected: vec![Token::Identifier("?".to_string())],
-                found: t.token.clone(),
-            }),
+            _ => Ok(TypeWrap::Epsilon),
         }
     }
 
@@ -561,7 +570,7 @@ impl Parser {
         self.parse_expr_wrap_app()
     }
 
-    // ExprWrap := ExprWrap ExprWrap
+    // ExprWrap := ExprWrap ExprWrap | Epsilon
     fn parse_expr_wrap_app(&mut self) -> Result<ExprWrap, ParseError> {
         let fst_token = self.peek();
         let mut atom = self.parse_expr_wrap_atom()?;
@@ -569,7 +578,7 @@ impl Parser {
             return Ok(ExprWrap::Epsilon);
         }
         loop {
-            let CoordToken{col,..} = self.peek();
+            let CoordToken { col, .. } = self.peek();
             if col == 1 {
                 return Ok(atom);
             }
@@ -577,7 +586,7 @@ impl Parser {
             if ExprWrap::Epsilon == next {
                 return Ok(atom);
             }
-           
+
             let last_token = next.get_last_token();
             atom = ExprWrap::Application {
                 func: Box::new(atom),
@@ -587,6 +596,7 @@ impl Parser {
             };
         }
     }
+    
     // ExprWrap := Var | Bool | λ Identifier => ExprWrap | (ExprWrap) | Epsilon
     fn parse_expr_wrap_atom(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
@@ -665,7 +675,7 @@ impl Parser {
         }
     }
 
-    // ExprWrap := λ Identifier => ExprWrap
+    // ExprWrap := λ Identifier => ExprWrap | Epsilon
     fn parse_expr_wrap_lambda(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
@@ -722,15 +732,20 @@ impl Parser {
                 token: Token::LeftParen,
                 ..
             } => {
+                let fst_token = self.peek();
                 self.advance();
                 let expr = self.parse_expr_wrap()?;
-                self.expect_token(Token::RightParen)?;
+                let last_token = self.expect_token(Token::RightParen)?;
                 if ExprWrap::Epsilon == expr {
                     return Err(ParseError::InvalidSyntax {
                         message: format!("expects an expression"),
                     });
                 }
-                Ok(expr)
+                Ok(ExprWrap::Paren {
+                    expr: Box::new(expr),
+                    fst_token,
+                    last_token,
+                })
             }
             _ => Ok(ExprWrap::Epsilon),
         }
@@ -765,7 +780,7 @@ mod tests {
     #[test]
     fn test_parse_type_atom() {
         let result = test_parse_type("Bool").unwrap();
-        assert_eq!(result.ty, Type::Atom("Bool".to_string()));
+        assert_eq!(result.ty, Type::Prim("Bool".to_string()));
         assert_eq!(result.row_start, 1);
         assert_eq!(result.col_start, 1);
     }
@@ -773,7 +788,7 @@ mod tests {
     #[test]
     fn test_parse_type_parenthesized() {
         let result = test_parse_type("(Bool)").unwrap();
-        assert_eq!(result.ty, Type::Atom("Bool".to_string()));
+        assert_eq!(result.ty, Type::Prim("Bool".to_string()));
     }
 
     #[test]
@@ -781,8 +796,8 @@ mod tests {
         let result = test_parse_type("Bool -> Int").unwrap();
         match result.ty {
             Type::Function { input, output } => {
-                assert_eq!(*input, Type::Atom("Bool".to_string()));
-                assert_eq!(*output, Type::Atom("Int".to_string()));
+                assert_eq!(*input, Type::Prim("Bool".to_string()));
+                assert_eq!(*output, Type::Prim("Int".to_string()));
             }
             _ => panic!("Expected function type"),
         }
@@ -793,14 +808,14 @@ mod tests {
         let result = test_parse_type("Bool -> Int -> String").unwrap();
         match result.ty {
             Type::Function { input, output } => {
-                assert_eq!(*input, Type::Atom("Bool".to_string()));
+                assert_eq!(*input, Type::Prim("Bool".to_string()));
                 match *output {
                     Type::Function {
                         input: inner_input,
                         output: inner_output,
                     } => {
-                        assert_eq!(*inner_input, Type::Atom("Int".to_string()));
-                        assert_eq!(*inner_output, Type::Atom("String".to_string()));
+                        assert_eq!(*inner_input, Type::Prim("Int".to_string()));
+                        assert_eq!(*inner_output, Type::Prim("String".to_string()));
                     }
                     _ => panic!("Expected nested function type"),
                 }
@@ -815,8 +830,8 @@ mod tests {
         let result = test_parse_type("Bool -> \nInt").unwrap();
         match result.ty {
             Type::Function { input, output } => {
-                assert_eq!(*input, Type::Atom("Bool".to_string()));
-                assert_eq!(*output, Type::Atom("Int".to_string()));
+                assert_eq!(*input, Type::Prim("Bool".to_string()));
+                assert_eq!(*output, Type::Prim("Int".to_string()));
             }
             _ => panic!("Expected function type"),
         }
@@ -832,12 +847,12 @@ mod tests {
                         input: inner_input,
                         output: inner_output,
                     } => {
-                        assert_eq!(*inner_input, Type::Atom("Bool".to_string()));
-                        assert_eq!(*inner_output, Type::Atom("Int".to_string()));
+                        assert_eq!(*inner_input, Type::Prim("Bool".to_string()));
+                        assert_eq!(*inner_output, Type::Prim("Int".to_string()));
                     }
                     _ => panic!("Expected nested function type in input"),
                 }
-                assert_eq!(*output, Type::Atom("String".to_string()));
+                assert_eq!(*output, Type::Prim("String".to_string()));
             }
             _ => panic!("Expected function type"),
         }
@@ -853,12 +868,12 @@ mod tests {
                         input: inner_input,
                         output: inner_output,
                     } => {
-                        assert_eq!(*inner_input, Type::Atom("Bool".to_string()));
-                        assert_eq!(*inner_output, Type::Atom("Int".to_string()));
+                        assert_eq!(*inner_input, Type::Prim("Bool".to_string()));
+                        assert_eq!(*inner_output, Type::Prim("Int".to_string()));
                     }
                     _ => panic!("Expected nested function type in input"),
                 }
-                assert_eq!(*output, Type::Atom("String".to_string()));
+                assert_eq!(*output, Type::Prim("String".to_string()));
             }
             _ => panic!("Expected function type"),
         }
@@ -1066,7 +1081,7 @@ mod tests {
         let mut parser = Parser::from_str("f : Bool").unwrap();
         let result = parser.parse_type_dec().unwrap();
         assert_eq!(result.type_dec.name, "f");
-        assert_eq!(result.type_dec.ty, Type::Atom("Bool".to_string()));
+        assert_eq!(result.type_dec.ty, Type::Prim("Bool".to_string()));
     }
 
     #[test]
@@ -1086,8 +1101,8 @@ mod tests {
         assert_eq!(result.dec.name, "f");
         match result.dec.ty_dec.ty {
             Type::Function { input, output } => {
-                assert_eq!(*input, Type::Atom("Bool".to_string()));
-                assert_eq!(*output, Type::Atom("Bool".to_string()));
+                assert_eq!(*input, Type::Prim("Bool".to_string()));
+                assert_eq!(*output, Type::Prim("Bool".to_string()));
             }
             _ => panic!("Expected function type"),
         }
@@ -1132,7 +1147,7 @@ main = id
         assert_eq!(result.program.main.name, "main");
         assert_eq!(
             result.program.main.ty_dec.ty,
-            Type::Atom("Unit".to_string())
+            Type::Prim("Unit".to_string())
         );
     }
 
@@ -1246,14 +1261,14 @@ main = curry
                     input: inner1,
                     output: inner2,
                 } => {
-                    assert_eq!(**inner1, Type::Atom("Bool".to_string()));
+                    assert_eq!(**inner1, Type::Prim("Bool".to_string()));
                     match inner2.as_ref() {
                         Type::Function {
                             input: inner3,
                             output: inner4,
                         } => {
-                            assert_eq!(**inner3, Type::Atom("Bool".to_string()));
-                            assert_eq!(**inner4, Type::Atom("Bool".to_string()));
+                            assert_eq!(**inner3, Type::Prim("Bool".to_string()));
+                            assert_eq!(**inner4, Type::Prim("Bool".to_string()));
                         }
                         _ => panic!("Expected nested function type"),
                     }
@@ -1280,12 +1295,10 @@ main = curry
         let result = test_parse_type(":");
         assert!(result.is_err());
         match result.unwrap_err() {
-            ParseError::UnexpectedToken { expected, found } => {
-                assert_eq!(found, Token::Colon);
-                // expected should contain Identifier
-                assert!(expected.into_iter().any(|t| t.is_identifier()));
+            ParseError::InvalidSyntax { message } => {
+                assert!(message.contains("expects a type"))
             }
-            _ => panic!("Expected UnexpectedToken error"),
+            _ => panic!("Expected  InvalidSyntax error"),
         }
     }
 
@@ -1313,19 +1326,6 @@ main = curry
         assert!(result.is_err());
     }
 
-    #[test]
-    fn delete() {
-        let input = r#"
-zero : (Bool -> Bool) -> Bool -> Bool
-zero = \x => x
---zero = \f => \x => f (f x) 
-
-main : Unit
-main = unit
-        "#;
-
-        let result = test_parse_program(input).unwrap();
-    }
     #[test]
     fn test_complex_lambda_calculus_program() {
         let input = r#"

@@ -35,7 +35,7 @@ pub struct FuncDec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    Atom(String),
+    Prim(String),
     Function { input: Box<Type>, output: Box<Type> },
 }
 
@@ -119,20 +119,20 @@ impl fmt::Display for Dec {
 
 impl fmt::Display for TypeDec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{} : {})", self.name, self.ty)
+        writeln!(f, "{} : {}", self.name, self.ty)
     }
 }
 
 impl fmt::Display for FuncDec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} = {})", self.name, self.body)
+        write!(f, "{} = {}", self.name, self.body)
     }
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Atom(s) => write!(f, "{s}"),
+            Type::Prim(s) => write!(f, "{s}"),
             Type::Function { input, output } => write!(f, "({input} -> {output})"),
         }
     }
