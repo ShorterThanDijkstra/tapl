@@ -105,6 +105,13 @@ enum ExprWrap {
         expr: Expr,
         token: CoordToken,
     },
+    If {
+        pred: Box<ExprWrap>,
+        conseq: Box<ExprWrap>,
+        alter: Box<ExprWrap>,
+        fst_token: CoordToken,
+        last_token: CoordToken,
+    },
     Paren {
         expr: Box<ExprWrap>,
         fst_token: CoordToken,
@@ -141,6 +148,23 @@ impl ExprWrap {
                 col_start: token.col,
                 row_end: token.row,
                 col_end: token.col + token.size - 1,
+            }),
+            ExprWrap::If {
+                pred,
+                conseq,
+                alter,
+                fst_token,
+                last_token,
+            } => Some(CoordExpr {
+                expr: Expr::If {
+                    pred: Box::new(pred.to_expr().unwrap().expr),
+                    conseq: Box::new(conseq.to_expr().unwrap().expr),
+                    alter: Box::new(alter.to_expr().unwrap().expr),
+                },
+                row_start: fst_token.row,
+                col_start: fst_token.col,
+                row_end: last_token.row,
+                col_end: last_token.col,
             }),
             ExprWrap::Paren {
                 expr,
@@ -194,6 +218,7 @@ impl ExprWrap {
             ExprWrap::Paren { last_token, .. } => last_token.clone(),
             ExprWrap::Lambda { last_token, .. } => last_token.clone(),
             ExprWrap::Application { last_token, .. } => last_token.clone(),
+            ExprWrap::If { last_token, .. } => last_token.clone(),
         }
     }
 }
@@ -553,9 +578,9 @@ impl Parser {
         }
     }
 
-    // Expr := Var | Bool | λ Identifier => Expr | (Expr) | Expr Expr
+    // Expr := Var | Bool | λ Identifier => Expr | (Expr) | if Expr then Expr else Expr | Expr Expr
     pub fn parse_expr(&mut self) -> Result<CoordExpr, ParseError> {
-        let wrap = self.parse_expr_wrap()?;
+        let wrap = self.parse_expr_wrap_non_epsilon()?;
         let expr = wrap.to_expr();
         match expr {
             Some(coord) => Ok(coord),
@@ -565,9 +590,20 @@ impl Parser {
         }
     }
 
-    // ExprWrap := Var | Bool | λ Identifier => ExprWrap | (ExprWrap) | ExprWrap ExprWrap | Epsilon
+    // ExprWrap := Var | Bool | λ Identifier => ExprWrap | (ExprWrap) |
+    //             if ExprWrap then ExprWrap else ExprWrap |ExprWrap ExprWrap | Epsilon
     fn parse_expr_wrap(&mut self) -> Result<ExprWrap, ParseError> {
         self.parse_expr_wrap_app()
+    }
+
+    fn parse_expr_wrap_non_epsilon(&mut self) -> Result<ExprWrap, ParseError> {
+        let expr = self.parse_expr_wrap()?;
+        if ExprWrap::Epsilon == expr {
+            return Err(ParseError::InvalidSyntax {
+                message: format!("expects an expression"),
+            });
+        }
+        Ok(expr)
     }
 
     // ExprWrap := ExprWrap ExprWrap | Epsilon
@@ -596,7 +632,7 @@ impl Parser {
             };
         }
     }
-    
+
     // ExprWrap := Var | Bool | λ Identifier => ExprWrap | (ExprWrap) | Epsilon
     fn parse_expr_wrap_atom(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
@@ -611,6 +647,9 @@ impl Parser {
                 ..
             } => Ok(self.parse_expr_wrap_bool()?),
 
+            CoordToken {
+                token: Token::IF, ..
+            } => Ok(self.parse_expr_wrap_if()?),
             CoordToken {
                 token: Token::Lambda,
                 ..
@@ -675,6 +714,40 @@ impl Parser {
         }
     }
 
+    // ExprWrap := if ExprWrap then ExprWrap else ExprWrap  | Epsilon
+    fn parse_expr_wrap_if(&mut self) -> Result<ExprWrap, ParseError> {
+        let peek = self.peek();
+        match peek {
+            CoordToken {
+                token: Token::IF,
+                row,
+                col,
+                ..
+            } => {
+                let fst_token = CoordToken {
+                    token: Token::IF,
+                    row,
+                    col,
+                    size: 2,
+                };
+                self.advance();
+                let pred = self.parse_expr_wrap_non_epsilon()?;
+                self.expect_token(Token::THEN)?;
+                let conseq = self.parse_expr_wrap_non_epsilon()?;
+                self.expect_token(Token::ELSE)?;
+                let alter = self.parse_expr_wrap_non_epsilon()?;
+                let last_token = alter.get_last_token();
+                Ok(ExprWrap::If {
+                    pred: Box::new(pred),
+                    conseq: Box::new(conseq),
+                    alter: Box::new(alter),
+                    fst_token,
+                    last_token,
+                })
+            }
+            _ => Ok(ExprWrap::Epsilon),
+        }
+    }
     // ExprWrap := λ Identifier => ExprWrap | Epsilon
     fn parse_expr_wrap_lambda(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
@@ -710,7 +783,7 @@ impl Parser {
                 };
 
                 self.expect_token(Token::RightArrowDouble)?;
-                let body = self.parse_expr_wrap()?;
+                let body = self.parse_expr_wrap_non_epsilon()?;
                 let last_token = body.get_last_token();
                 let wrap = ExprWrap::Lambda {
                     param,
@@ -734,13 +807,8 @@ impl Parser {
             } => {
                 let fst_token = self.peek();
                 self.advance();
-                let expr = self.parse_expr_wrap()?;
+                let expr = self.parse_expr_wrap_non_epsilon()?;
                 let last_token = self.expect_token(Token::RightParen)?;
-                if ExprWrap::Epsilon == expr {
-                    return Err(ParseError::InvalidSyntax {
-                        message: format!("expects an expression"),
-                    });
-                }
                 Ok(ExprWrap::Paren {
                     expr: Box::new(expr),
                     fst_token,
@@ -1383,6 +1451,50 @@ main = unit
     #[test]
     fn test_lambda_wrong_arrow_type() {
         let result = test_parse_expr("\\x -> x");
+        assert!(result.is_err());
+    }
+    #[test]
+    fn test_parse_expr_if_simple() {
+        let result = test_parse_expr("if True then x else y").unwrap();
+        match result.expr {
+            Expr::If { pred, conseq, alter } => {
+                assert_eq!(*pred, Expr::Bool(true));
+                assert_eq!(*conseq, Expr::Var("x".to_string()));
+                assert_eq!(*alter, Expr::Var("y".to_string()));
+            }
+            _ => panic!("Expected If expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_if_nested() {
+        let result = test_parse_expr("if False then if True then x else y else z").unwrap();
+        match result.expr {
+            Expr::If { pred, conseq, alter } => {
+                assert_eq!(*pred, Expr::Bool(false));
+                match *conseq {
+                    Expr::If { pred: p2, conseq: c2, alter: a2 } => {
+                        assert_eq!(*p2, Expr::Bool(true));
+                        assert_eq!(*c2, Expr::Var("x".to_string()));
+                        assert_eq!(*a2, Expr::Var("y".to_string()));
+                    }
+                    _ => panic!("Expected nested If in conseq"),
+                }
+                assert_eq!(*alter, Expr::Var("z".to_string()));
+            }
+            _ => panic!("Expected If expression"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expr_if_error_missing_then() {
+        let result = test_parse_expr("if True x else y");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_expr_if_error_missing_else() {
+        let result = test_parse_expr("if True then x y");
         assert!(result.is_err());
     }
 }

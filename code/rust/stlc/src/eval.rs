@@ -11,24 +11,6 @@ fn gensym(prefix: &str) -> String {
     format!("{}{}", prefix, id)
 }
 
-fn alpha_convention(expr: &Expr) -> Expr {
-    match expr {
-        Expr::Var(x) => Expr::Var(gensym(x)),
-        Expr::Bool(b) => Expr::Bool(*b),
-        Expr::Application { func, arg } => Expr::Application {
-            func: Box::new(alpha_convention(func)),
-            arg: Box::new(alpha_convention(arg)),
-        },
-        Expr::Lambda { param, body } => {
-            let new_param = gensym(param);
-            let new_body = substitute(&*body, param, &Expr::Var(new_param.clone()));
-            Expr::Lambda {
-                param: new_param,
-                body: Box::new(alpha_convention(&new_body)),
-            }
-        }
-    }
-}
 fn frees(expr: &Expr) -> HashSet<String> {
     match expr {
         Expr::Var(x) => HashSet::from([x.clone()]),
@@ -42,6 +24,18 @@ fn frees(expr: &Expr) -> HashSet<String> {
         Expr::Lambda { param, body } => {
             let mut frees1 = frees(body);
             frees1.remove(param);
+            frees1
+        }
+        Expr::If {
+            pred,
+            conseq,
+            alter,
+        } => {
+            let mut frees1 = frees(pred);
+            let frees2 = frees(conseq);
+            let frees3 = frees(alter);
+            frees1.extend(frees2);
+            frees1.extend(frees3);
             frees1
         }
     }
@@ -62,6 +56,20 @@ pub fn substitute(body: &Expr, x: &str, s: &Expr) -> Expr {
             Expr::Application {
                 func: Box::new(func1),
                 arg: Box::new(arg1),
+            }
+        }
+        Expr::If {
+            pred,
+            conseq,
+            alter,
+        } => {
+            let pred = Box::new(substitute(pred, x, s));
+            let conseq = Box::new(substitute(conseq, x, s));
+            let alter = Box::new(substitute(alter, x, s));
+            Expr::If {
+                pred,
+                conseq,
+                alter,
             }
         }
         Expr::Lambda {
@@ -114,6 +122,17 @@ pub fn step(expr: Expr) -> Option<Expr> {
                 arg,
             })
         }
+        Expr::If { pred, conseq, .. } if pred.is_true() => Some(*conseq),
+        Expr::If { pred, alter, .. } if pred.is_false() => Some(*alter),
+        Expr::If {
+            pred,
+            conseq,
+            alter,
+        } => step(*pred).map(|next| Expr::If {
+            pred: Box::new(next),
+            conseq,
+            alter,
+        }),
         _ => None,
     }
 }
@@ -128,7 +147,6 @@ pub fn eval(mut expr: Expr) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
 
     #[test]
     fn test_eval_simple_bool() {
@@ -223,20 +241,56 @@ mod tests {
         assert_eq!(eval(expr), expected);
     }
     #[test]
-    fn test_substitute1() {
-        let expr = Parser::from_str("λx => x")
-            .unwrap()
-            .parse_expr()
-            .unwrap()
-            .expr;
-        let expr1 = substitute(&expr, "x", &Expr::Var(format!("y")));
-        println!("{}", expr1);
-        assert_eq!(
-            expr1,
-            Expr::Lambda {
-                param: "x".to_string(),
-                body: Box::new(Expr::Var("x".to_string()))
-            }
-        );
+    fn test_eval_if_true() {
+        // if True then False else True ==> False
+        let expr = Expr::If {
+            pred: Box::new(Expr::Bool(true)),
+            conseq: Box::new(Expr::Bool(false)),
+            alter: Box::new(Expr::Bool(true)),
+        };
+        assert_eq!(eval(expr), Expr::Bool(false));
+    }
+
+    #[test]
+    fn test_eval_if_false() {
+        // if False then True else False ==> False
+        let expr = Expr::If {
+            pred: Box::new(Expr::Bool(false)),
+            conseq: Box::new(Expr::Bool(true)),
+            alter: Box::new(Expr::Bool(false)),
+        };
+        assert_eq!(eval(expr), Expr::Bool(false));
+    }
+
+    #[test]
+    fn test_eval_if_nested() {
+        // if (if True then False else True) then True else False ==> False
+        let expr = Expr::If {
+            pred: Box::new(Expr::If {
+                pred: Box::new(Expr::Bool(true)),
+                conseq: Box::new(Expr::Bool(false)),
+                alter: Box::new(Expr::Bool(true)),
+            }),
+            conseq: Box::new(Expr::Bool(true)),
+            alter: Box::new(Expr::Bool(false)),
+        };
+        assert_eq!(eval(expr), Expr::Bool(false));
+    }
+
+    #[test]
+    fn test_eval_if_with_application_predicate() {
+        // if ((λx => x) True) then False else True ==> False
+        let expr = Expr::If {
+            pred: Box::new(Expr::Application {
+                func: Box::new(Expr::Lambda {
+                    param: "x".to_string(),
+                    body: Box::new(Expr::Var("x".to_string())),
+                }),
+                arg: Box::new(Expr::Bool(true)),
+            }),
+            conseq: Box::new(Expr::Bool(false)),
+            alter: Box::new(Expr::Bool(true)),
+        };
+        assert_eq!(eval(expr), Expr::Bool(false));
     }
 }

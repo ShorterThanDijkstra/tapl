@@ -1,8 +1,14 @@
-use std::fmt::{self};
+use std::{
+    char::REPLACEMENT_CHARACTER,
+    fmt::{self},
+};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Identifier(String),
     BooleanLiteral(bool),
+    IF,
+    THEN,
+    ELSE,
     Colon,            // :
     RightArrow,       // ->
     Equals,           // =
@@ -18,6 +24,9 @@ impl Token {
             Token::Identifier(s) => s.len(),
             Token::BooleanLiteral(true) => 4,
             Token::BooleanLiteral(false) => 5,
+            Token::IF => 2,
+            Token::THEN => 4,
+            Token::ELSE => 4,
             Token::Colon => 1,
             Token::RightArrow => 2,
             Token::Equals => 1,
@@ -38,6 +47,9 @@ impl fmt::Display for Token {
             Self::Identifier(str) => write!(f, "{}", str),
             Self::BooleanLiteral(true) => write!(f, "True"),
             Self::BooleanLiteral(false) => write!(f, "False"),
+            Self::IF => write!(f, "if"),
+            Self::THEN => write!(f, "then"),
+            Self::ELSE => write!(f, "else"),
             Self::Colon => write!(f, ":"),
             Self::RightArrow => write!(f, "->"),
             Self::Equals => write!(f, "="),
@@ -84,6 +96,7 @@ pub struct Lexer {
 }
 
 impl Lexer {
+    const RESERVED_WORDS: &'static [&'static str] = &["True", "False", "if", "then", "else"];
     pub fn new(input: &str) -> Self {
         let chars: Vec<char> = input.chars().collect();
         Self {
@@ -278,7 +291,13 @@ impl Lexer {
                     let token = match identifier.as_str() {
                         "True" => Token::BooleanLiteral(true),
                         "False" => Token::BooleanLiteral(false),
-                        _ => Token::Identifier(identifier),
+                        "if" => Token::IF,
+                        "then" => Token::THEN,
+                        "else" => Token::ELSE,
+                        _ => {
+                            assert!(!Self::RESERVED_WORDS.contains(&identifier.as_str()));
+                            Token::Identifier(identifier)
+                        }
                     };
                     let coord_token = self.wrap_token_row_col(token, row, col);
                     return Ok(coord_token);
@@ -719,5 +738,82 @@ mod tests {
                 .contains(&Token::Equals)
         );
         assert!(tokens.last().unwrap().is_token(Token::EOF));
+    }
+    #[test]
+    fn test_reserved_words_true() {
+        let mut lexer = Lexer::new("True");
+        match lexer.next_token().unwrap() {
+            CoordToken {
+                token: Token::BooleanLiteral(true),
+                ..
+            } => {}
+            other => panic!("Expected BooleanLiteral(true), got {:?}", other),
+        }
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
+    }
+
+    #[test]
+    fn test_reserved_words_false() {
+        let mut lexer = Lexer::new("False");
+        match lexer.next_token().unwrap() {
+            CoordToken {
+                token: Token::BooleanLiteral(false),
+                ..
+            } => {}
+            other => panic!("Expected BooleanLiteral(false), got {:?}", other),
+        }
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
+    }
+
+    #[test]
+    fn test_reserved_words_if() {
+        let mut lexer = Lexer::new("if");
+        match lexer.next_token().unwrap() {
+            CoordToken {
+                token: Token::IF, ..
+            } => {}
+            other => panic!("Expected IF, got {:?}", other),
+        }
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
+    }
+
+    #[test]
+    fn test_reserved_words_then() {
+        let mut lexer = Lexer::new("then");
+        match lexer.next_token().unwrap() {
+            CoordToken {
+                token: Token::THEN, ..
+            } => {}
+            other => panic!("Expected THEN, got {:?}", other),
+        }
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
+    }
+
+    #[test]
+    fn test_reserved_words_else() {
+        let mut lexer = Lexer::new("else");
+        match lexer.next_token().unwrap() {
+            CoordToken {
+                token: Token::ELSE, ..
+            } => {}
+            other => panic!("Expected ELSE, got {:?}", other),
+        }
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
+    }
+
+    #[test]
+    fn test_reserved_words_mixed() {
+        let mut lexer = Lexer::new("if then else True False");
+        let expected = vec![
+            Token::IF,
+            Token::THEN,
+            Token::ELSE,
+            Token::BooleanLiteral(true),
+            Token::BooleanLiteral(false),
+            Token::EOF,
+        ];
+        for expected_token in expected {
+            assert!(lexer.next_token().unwrap().is_token(expected_token));
+        }
     }
 }

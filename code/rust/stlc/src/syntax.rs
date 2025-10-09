@@ -1,4 +1,4 @@
-use std::{fmt};
+use std::fmt;
 
 /*
  * Program := Dec Dec*
@@ -43,8 +43,19 @@ pub enum Type {
 pub enum Expr {
     Var(String),
     Bool(bool),
-    Application { func: Box<Expr>, arg: Box<Expr> },
-    Lambda { param: String, body: Box<Expr> },
+    If {
+        pred: Box<Expr>,
+        conseq: Box<Expr>,
+        alter: Box<Expr>,
+    },
+    Application {
+        func: Box<Expr>,
+        arg: Box<Expr>,
+    },
+    Lambda {
+        param: String,
+        body: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,6 +155,7 @@ impl fmt::Display for Expr {
             Expr::Var(s) => write!(f, "{s}"),
             Expr::Bool(true) => write!(f, "True"),
             Expr::Bool(false) => write!(f, "False"),
+            Expr::If { pred, conseq, alter } => write!(f, "if {pred} then {conseq} else {alter}"),
             Expr::Application { func, arg } => write!(f, "({func} {arg})"),
             Expr::Lambda { param, body } => write!(f, "(λ{param} => {body})"),
         }
@@ -220,5 +232,12 @@ impl Expr {
     pub fn is_lambda(&self) -> bool {
         matches!(self, Expr::Lambda { .. })
     }
-}
 
+    pub fn is_true(&self) -> bool {
+        matches!(self, Expr::Bool(true))
+    }
+    
+    pub fn is_false(&self) -> bool {
+        matches!(self, Expr::Bool(false))
+    }
+}
