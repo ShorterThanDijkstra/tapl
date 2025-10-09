@@ -554,7 +554,7 @@ impl Parser {
     }
 
     // Expr := Var | Bool | λ Identifier => Expr | (Expr) | Expr Expr
-    fn parse_expr(&mut self) -> Result<CoordExpr, ParseError> {
+    pub fn parse_expr(&mut self) -> Result<CoordExpr, ParseError> {
         let wrap = self.parse_expr_wrap()?;
         let expr = wrap.to_expr();
         match expr {

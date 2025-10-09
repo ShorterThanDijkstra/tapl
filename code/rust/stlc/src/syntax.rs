@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt};
 
 /*
  * Program := Dec Dec*
@@ -142,7 +142,8 @@ impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Expr::Var(s) => write!(f, "{s}"),
-            Expr::Bool(b) => write!(f, "{b}"),
+            Expr::Bool(true) => write!(f, "True"),
+            Expr::Bool(false) => write!(f, "False"),
             Expr::Application { func, arg } => write!(f, "({func} {arg})"),
             Expr::Lambda { param, body } => write!(f, "(λ{param} => {body})"),
         }
@@ -206,6 +207,18 @@ impl fmt::Display for CoordExpr {
             "{} [{}:{}-{}:{}]",
             self.expr, self.row_start, self.col_start, self.row_end, self.col_end
         )
+    }
+}
+impl Expr {
+    pub fn is_value(&self) -> bool {
+        match self {
+            Expr::Bool(_) => true,
+            Expr::Lambda { .. } => true,
+            _ => false,
+        }
+    }
+    pub fn is_lambda(&self) -> bool {
+        matches!(self, Expr::Lambda { .. })
     }
 }
 
