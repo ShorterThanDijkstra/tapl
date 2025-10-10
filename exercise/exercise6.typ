@@ -8,3 +8,9 @@
 - 6.2.2 \
   1. $(lambda . lambda . 1 (0 space 4))$ \ 
   2. $(lambda . 0 space 1 space (lambda . 0 space 1 space 4))$
+
+- 6.2.5 \
+  1. $[0 arrow 1] (0 (lambda . lambda . 2))$
+  2. $[0 arrow 1 (lambda . 2)] (0 (lambda . 1))$
+  3. $[0 arrow 1] (lambda . 0 space 2)$
+  4. $[0 arrow 1] (lambda . 1 space 0)$

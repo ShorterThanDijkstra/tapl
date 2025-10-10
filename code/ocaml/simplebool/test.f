@@ -1,5 +1,5 @@
 /* Examples for testing */
-
+/*
  lambda x:Bool. x;
 
  (lambda x:Bool->Bool. if x false then true else false) 
@@ -19,3 +19,5 @@ true; /* Bool */
 (lambda x:Bool -> Bool. x) /* (Bool -> Bool) -> (Bool -> Bool) */
 (lambda x:Bool. x) /* Bool -> Bool */
 true; /* Bool */
+*/
+((λx => λy => x) true) false
