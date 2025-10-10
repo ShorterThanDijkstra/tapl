@@ -139,7 +139,6 @@ pub fn step(expr: Expr) -> Option<Expr> {
 
 pub fn eval(mut expr: Expr) -> Expr {
     while let Some(next) = step(expr.clone()) {
-        println!("{}", next);
         expr = next;
     }
     expr

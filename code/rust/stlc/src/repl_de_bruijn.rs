@@ -1,13 +1,18 @@
-use crate::eval::eval;
 use crate::parser::Parser;
-use crate::syntax::Expr;
+use crate::syntax::{DeBruijnExpr};
+use crate::{eval_de_bruijn::eval, };
 use std::io::{self, Write};
-fn parse_expr(s: &str) -> Result<Expr, String> {
+fn parse_expr(s: &str) -> Result<DeBruijnExpr, String> {
     let from_str = Parser::from_str(s);
 
     match from_str {
         Ok(mut parser) => match parser.parse_expr() {
-            Ok(expr) => Ok(expr.expr),
+            Ok(coord_expr) => match DeBruijnExpr::from_expr(coord_expr.expr) {
+                Ok(de_bruijn_expr) => {
+                    Ok(de_bruijn_expr)
+                }
+                Err(e) => Err(format!("{}", e)),
+            },
             Err(e) => Err(format!("{}", e)),
         },
         Err(e) => Err(format!("{}", e)),

@@ -13,7 +13,35 @@ pub enum ParseError {
     UnexpectedEof { expected: Vec<Token> },
     InvalidSyntax { message: String },
 }
-
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::LexerError(e) => write!(f, "Lexer error: {}", e),
+            ParseError::UnexpectedToken { expected, found } => {
+                let expected_str = expected
+                    .iter()
+                    .map(|t| format!("{:?}", t))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "Unexpected token: expected one of [{}], found {:?}",
+                    expected_str, found
+                )
+            }
+            ParseError::UnexpectedEof { expected } => {
+                let expected_str = expected
+                    .iter()
+                    .map(|t| format!("{:?}", t))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "Unexpected end of file: expected one of [{}]", expected_str)
+            }
+            ParseError::InvalidSyntax { message } => write!(f, "Invalid syntax: {}", message),
+        }
+    }
+    
+}
 impl From<LexerError> for ParseError {
     fn from(error: LexerError) -> Self {
         ParseError::LexerError(error)
@@ -585,7 +613,7 @@ impl Parser {
         match expr {
             Some(coord) => Ok(coord),
             None => Err(ParseError::InvalidSyntax {
-                message: format!("expects an expression"),
+                message: format!("expects an expression at {}:{}", self.peek().row, self.peek().col),
             }),
         }
     }
@@ -600,7 +628,7 @@ impl Parser {
         let expr = self.parse_expr_wrap()?;
         if ExprWrap::Epsilon == expr {
             return Err(ParseError::InvalidSyntax {
-                message: format!("expects an expression"),
+                message: format!("expects an expression at {}:{}", self.peek().row, self.peek().col),
             });
         }
         Ok(expr)
@@ -1457,7 +1485,11 @@ main = unit
     fn test_parse_expr_if_simple() {
         let result = test_parse_expr("if True then x else y").unwrap();
         match result.expr {
-            Expr::If { pred, conseq, alter } => {
+            Expr::If {
+                pred,
+                conseq,
+                alter,
+            } => {
                 assert_eq!(*pred, Expr::Bool(true));
                 assert_eq!(*conseq, Expr::Var("x".to_string()));
                 assert_eq!(*alter, Expr::Var("y".to_string()));
@@ -1470,10 +1502,18 @@ main = unit
     fn test_parse_expr_if_nested() {
         let result = test_parse_expr("if False then if True then x else y else z").unwrap();
         match result.expr {
-            Expr::If { pred, conseq, alter } => {
+            Expr::If {
+                pred,
+                conseq,
+                alter,
+            } => {
                 assert_eq!(*pred, Expr::Bool(false));
                 match *conseq {
-                    Expr::If { pred: p2, conseq: c2, alter: a2 } => {
+                    Expr::If {
+                        pred: p2,
+                        conseq: c2,
+                        alter: a2,
+                    } => {
                         assert_eq!(*p2, Expr::Bool(true));
                         assert_eq!(*c2, Expr::Var("x".to_string()));
                         assert_eq!(*a2, Expr::Var("y".to_string()));

@@ -88,6 +88,29 @@ pub enum LexerError {
     UnknownChar { found: char },
 }
 
+impl fmt::Display for LexerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LexerError::UnexpectedChar { expected, found } => {
+                write!(
+                    f,
+                    "Unexpected character: expected one of {:?}, found '{}'",
+                    expected, found
+                )
+            }
+            LexerError::UnknownChar { found } => {
+                let display_char = if *found == REPLACEMENT_CHARACTER {
+                    "\\u{FFFD}".to_string()
+                } else {
+                    found.to_string()
+                };
+                write!(f, "Unknown character: '{}'", display_char)
+            }
+        }
+    }
+    
+}
+
 pub struct Lexer {
     input: Vec<char>,
     position: usize,
