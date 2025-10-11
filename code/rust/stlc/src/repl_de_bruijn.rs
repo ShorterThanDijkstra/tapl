@@ -1,6 +1,6 @@
 use crate::parser::Parser;
 use crate::syntax::{DeBruijnExpr};
-use crate::{eval_de_bruijn::eval, };
+use crate::{eval_de_bruijn::eval_expr, };
 use std::io::{self, Write};
 fn parse_expr(s: &str) -> Result<DeBruijnExpr, String> {
     let from_str = Parser::from_str(s);
@@ -34,7 +34,7 @@ pub fn repl() {
         }
         match parse_expr(input) {
             Ok(expr) => {
-                let result = eval(expr.clone());
+                let result = eval_expr(expr.clone());
                 println!("=> {}", result);
             }
             Err(e) => println!("{}", e),

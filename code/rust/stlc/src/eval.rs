@@ -1,8 +1,22 @@
-use crate::syntax::Expr;
+use crate::syntax::{Expr, Program};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
+    str,
     sync::atomic::{AtomicUsize, Ordering},
 };
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Env(HashMap<String, Value>);
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    Boolean(bool),
+    Closure {
+        param: String,
+        body: Box<Expr>,
+        saved_env: Env,
+    },
+}
 
 static GENSYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -101,7 +115,7 @@ pub fn substitute(body: &Expr, x: &str, s: &Expr) -> Expr {
     }
 }
 
-pub fn step(expr: Expr) -> Option<Expr> {
+pub fn step_expr(expr: Expr) -> Option<Expr> {
     match expr {
         Expr::Application { func, arg } if (*func).is_lambda() && (*arg).is_value() => {
             if let Expr::Lambda { param, body } = *func {
@@ -111,13 +125,13 @@ pub fn step(expr: Expr) -> Option<Expr> {
             }
         }
         Expr::Application { func, arg } if (*func).is_value() => {
-            step(*arg).map(|next| Expr::Application {
+            step_expr(*arg).map(|next| Expr::Application {
                 func,
                 arg: Box::new(next),
             })
         }
         Expr::Application { func, arg } if (*arg).is_value() => {
-            step(*func).map(|next| Expr::Application {
+            step_expr(*func).map(|next| Expr::Application {
                 func: Box::new(next),
                 arg,
             })
@@ -128,7 +142,7 @@ pub fn step(expr: Expr) -> Option<Expr> {
             pred,
             conseq,
             alter,
-        } => step(*pred).map(|next| Expr::If {
+        } => step_expr(*pred).map(|next| Expr::If {
             pred: Box::new(next),
             conseq,
             alter,
@@ -137,12 +151,13 @@ pub fn step(expr: Expr) -> Option<Expr> {
     }
 }
 
-pub fn eval(mut expr: Expr) -> Expr {
-    while let Some(next) = step(expr.clone()) {
+pub fn eval_expr(mut expr: Expr) -> Expr {
+    while let Some(next) = step_expr(expr.clone()) {
         expr = next;
     }
     expr
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,13 +165,13 @@ mod tests {
     #[test]
     fn test_eval_simple_bool() {
         let expr = Expr::Bool(true);
-        assert_eq!(eval(expr.clone()), expr);
+        assert_eq!(eval_expr(expr.clone()), expr);
     }
 
     #[test]
     fn test_eval_var() {
         let expr = Expr::Var("x".to_string());
-        assert_eq!(eval(expr.clone()), expr);
+        assert_eq!(eval_expr(expr.clone()), expr);
     }
 
     #[test]
@@ -165,7 +180,7 @@ mod tests {
             param: "x".to_string(),
             body: Box::new(Expr::Var("x".to_string())),
         };
-        assert_eq!(eval(expr.clone()), expr);
+        assert_eq!(eval_expr(expr.clone()), expr);
     }
 
     #[test]
@@ -178,7 +193,7 @@ mod tests {
             }),
             arg: Box::new(Expr::Bool(true)),
         };
-        assert_eq!(eval(expr), Expr::Bool(true));
+        assert_eq!(eval_expr(expr), Expr::Bool(true));
     }
 
     #[test]
@@ -198,7 +213,7 @@ mod tests {
             arg: Box::new(Expr::Bool(false)),
         };
         let expected = Expr::Bool(true);
-        assert_eq!(eval(expr), expected);
+        assert_eq!(eval_expr(expr), expected);
     }
 
     #[test]
@@ -217,7 +232,7 @@ mod tests {
                 arg: Box::new(Expr::Bool(true)),
             }),
         };
-        assert_eq!(eval(expr), Expr::Bool(true));
+        assert_eq!(eval_expr(expr), Expr::Bool(true));
     }
 
     #[test]
@@ -237,7 +252,7 @@ mod tests {
             param: "x".to_string(),
             body: Box::new(Expr::Var("x".to_string())),
         };
-        assert_eq!(eval(expr), expected);
+        assert_eq!(eval_expr(expr), expected);
     }
     #[test]
     fn test_eval_if_true() {
@@ -247,7 +262,7 @@ mod tests {
             conseq: Box::new(Expr::Bool(false)),
             alter: Box::new(Expr::Bool(true)),
         };
-        assert_eq!(eval(expr), Expr::Bool(false));
+        assert_eq!(eval_expr(expr), Expr::Bool(false));
     }
 
     #[test]
@@ -258,7 +273,7 @@ mod tests {
             conseq: Box::new(Expr::Bool(true)),
             alter: Box::new(Expr::Bool(false)),
         };
-        assert_eq!(eval(expr), Expr::Bool(false));
+        assert_eq!(eval_expr(expr), Expr::Bool(false));
     }
 
     #[test]
@@ -273,7 +288,7 @@ mod tests {
             conseq: Box::new(Expr::Bool(true)),
             alter: Box::new(Expr::Bool(false)),
         };
-        assert_eq!(eval(expr), Expr::Bool(false));
+        assert_eq!(eval_expr(expr), Expr::Bool(false));
     }
 
     #[test]
@@ -290,6 +305,6 @@ mod tests {
             conseq: Box::new(Expr::Bool(false)),
             alter: Box::new(Expr::Bool(true)),
         };
-        assert_eq!(eval(expr), Expr::Bool(false));
+        assert_eq!(eval_expr(expr), Expr::Bool(false));
     }
 }

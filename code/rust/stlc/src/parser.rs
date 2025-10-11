@@ -35,12 +35,15 @@ impl std::fmt::Display for ParseError {
                     .map(|t| format!("{:?}", t))
                     .collect::<Vec<String>>()
                     .join(", ");
-                write!(f, "Unexpected end of file: expected one of [{}]", expected_str)
+                write!(
+                    f,
+                    "Unexpected end of file: expected one of [{}]",
+                    expected_str
+                )
             }
             ParseError::InvalidSyntax { message } => write!(f, "Invalid syntax: {}", message),
         }
     }
-    
 }
 impl From<LexerError> for ParseError {
     fn from(error: LexerError) -> Self {
@@ -282,6 +285,13 @@ impl Parser {
         }
     }
 
+    fn look_ahead(&self, pos: usize) -> CoordToken {
+        let peek = self.tokens.get(self.position + pos);
+        match peek {
+            None => self.eof.clone(),
+            Some(t) => t.clone(),
+        }
+    }
     fn advance(&mut self) {
         self.position += 1;
     }
@@ -303,41 +313,39 @@ impl Parser {
     // Program := Dec {Dec}
     pub fn parse_program(&mut self) -> Result<CoordProgram, ParseError> {
         let mut coord_decs = Vec::new();
-        let mut main = None;
         loop {
-            let token = self.peek();
-            if token.is_token(Token::EOF) {
+            if self.peek().is_token(Token::EOF) {
+                return Err(ParseError::InvalidSyntax {
+                    message: format!("Program must have a main expression"),
+                });
+            }
+            if !(Token::is_identifier(&self.peek().token)
+                && self.look_ahead(1).is_token(Token::Colon))
+            {
                 break;
             }
             let coord_dec = self.parse_dec()?;
-            if !Self::is_main_dec(&coord_dec) {
-                coord_decs.push(coord_dec);
-            } else if main.is_none() {
-                main = Some(coord_dec);
-            } else {
-                return Err(ParseError::InvalidSyntax {
-                    message: format!("Program must contain at exactly one main declaration"),
-                });
-            }
+            coord_decs.push(coord_dec);
         }
 
-        if main.is_none() {
+        let main = self.parse_expr()?;
+
+        if !self.peek().is_token(Token::EOF) {
             return Err(ParseError::InvalidSyntax {
-                message: format!("Program must contain at exactly one main declaration"),
+                message: format!("Only one main expression is allowed",),
             });
         }
-
         let program = Program {
             decs: coord_decs
                 .iter()
                 .map(|coord_dec| coord_dec.dec.clone())
                 .collect(),
-            main: main.clone().unwrap().dec,
+            main: main.expr,
         };
-        let mut row_start = main.clone().unwrap().row_start;
-        let mut col_start = main.clone().unwrap().col_start;
-        let mut row_end = main.clone().unwrap().row_end;
-        let mut col_end = main.clone().unwrap().col_end;
+        let mut row_start = main.row_start;
+        let mut col_start = main.col_start;
+        let mut row_end = main.row_end;
+        let mut col_end = main.col_end;
         for dec in coord_decs {
             if row_start >= dec.row_start {
                 row_start = dec.row_start;
@@ -358,10 +366,10 @@ impl Parser {
         Ok(coord_prog)
     }
 
-    fn is_main_dec(coord_dec: &CoordDec) -> bool {
+    /*  fn is_main_dec(coord_dec: &CoordDec) -> bool {
         let dec = coord_dec.dec.clone();
         return dec.name == "main" && dec.ty_dec.ty == Type::Prim("Unit".to_string());
-    }
+    } */
 
     // Dec := TypeDec "\n" FuncDec
     fn parse_dec(&mut self) -> Result<CoordDec, ParseError> {
@@ -613,7 +621,11 @@ impl Parser {
         match expr {
             Some(coord) => Ok(coord),
             None => Err(ParseError::InvalidSyntax {
-                message: format!("expects an expression at {}:{}", self.peek().row, self.peek().col),
+                message: format!(
+                    "expects an expression at {}:{}",
+                    self.peek().row,
+                    self.peek().col
+                ),
             }),
         }
     }
@@ -628,7 +640,11 @@ impl Parser {
         let expr = self.parse_expr_wrap()?;
         if ExprWrap::Epsilon == expr {
             return Err(ParseError::InvalidSyntax {
-                message: format!("expects an expression at {}:{}", self.peek().row, self.peek().col),
+                message: format!(
+                    "expects an expression at {}:{}",
+                    self.peek().row,
+                    self.peek().col
+                ),
             });
         }
         Ok(expr)
@@ -1233,18 +1249,18 @@ mod tests {
 id : Bool -> Bool
 id = \x => x
 
-main : Unit
-main = id
+id
+
 "#;
         let result = test_parse_program(input).unwrap();
 
         assert_eq!(result.program.decs.len(), 1);
         assert_eq!(result.program.decs[0].name, "id");
-        assert_eq!(result.program.main.name, "main");
+        /*         assert_eq!(result.program.main.name, "main");
         assert_eq!(
             result.program.main.ty_dec.ty,
             Type::Prim("Unit".to_string())
-        );
+        ) */
     }
 
     #[test]
@@ -1256,15 +1272,14 @@ id = \x => x
 const : Bool -> Bool -> Bool
 const = \x => \y => x
 
-main : Unit
-main = id
+id
 "#;
         let result = test_parse_program(input).unwrap();
 
         assert_eq!(result.program.decs.len(), 2);
         assert_eq!(result.program.decs[0].name, "id");
         assert_eq!(result.program.decs[1].name, "const");
-        assert_eq!(result.program.main.name, "main");
+        // assert_eq!(result.program.main.name, "main");
     }
 
     #[test]
@@ -1277,7 +1292,7 @@ id = \x => x
         assert!(result.is_err());
         match result.unwrap_err() {
             ParseError::InvalidSyntax { message } => {
-                assert!(message.contains("main declaration"));
+                assert!(message.contains("main expression"));
             }
             _ => panic!("Expected InvalidSyntax error"),
         }
@@ -1286,17 +1301,14 @@ id = \x => x
     #[test]
     fn test_parse_program_error_multiple_main() {
         let input = r#"
-main : Unit
-main = x
-
-main : Unit  
-main = y
+True
+False
 "#;
         let result = test_parse_program(input);
         assert!(result.is_err());
         match result.unwrap_err() {
             ParseError::InvalidSyntax { message } => {
-                assert!(message.contains("exactly one main"));
+                assert!(message.contains("one main"));
             }
             _ => panic!("Expected InvalidSyntax error"),
         }
@@ -1323,20 +1335,20 @@ id : Bool -> Bool
 id = \x => x
 
 -- Main program
-main : Unit
-main = id  -- Apply identity
+id
 "#;
         let result = test_parse_program(input).unwrap();
         assert_eq!(result.program.decs.len(), 1);
-        assert_eq!(result.program.main.name, "main");
+        // assert_eq!(result.program.main.name, "main");
     }
 
     #[test]
     fn test_parse_program_mixed_whitespace() {
-        let input = "id : Bool -> Bool\nid = \\x => x\n\nmain : Unit\nmain = id";
+        let input = "id : Bool -> Bool\nid = \\x => x\n\n id\nid";
         let result = test_parse_program(input).unwrap();
+        println!("{:#?}", result);
         assert_eq!(result.program.decs.len(), 1);
-        assert_eq!(result.program.main.name, "main");
+        // assert_eq!(result.program.main.name, "main");
     }
 
     #[test]
@@ -1345,8 +1357,8 @@ main = id  -- Apply identity
 curry : (Bool -> Bool -> Bool) -> Bool -> Bool -> Bool
 curry = \f => \x => \y => f x y
 
-main : Unit
-main = curry
+curry
+
 "#;
         let result = test_parse_program(input).unwrap();
 
@@ -1446,12 +1458,11 @@ two = \f => \x => f (f x)
 three : (Bool -> Bool) -> Bool -> Bool
 three = \f => \x => f (f (f x))
 
-main : Unit
-main = unit
+zero
 "#;
         let result = test_parse_program(input).unwrap();
         assert_eq!(result.program.decs.len(), 7);
-        assert_eq!(result.program.main.name, "main");
+        // assert_eq!(result.program.main.name, "main");
     }
 
     // Test lambda with =>, not ->

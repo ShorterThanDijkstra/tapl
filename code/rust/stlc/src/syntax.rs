@@ -10,7 +10,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub decs: Vec<Dec>,
-    pub main: Dec,
+    pub main: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq)]

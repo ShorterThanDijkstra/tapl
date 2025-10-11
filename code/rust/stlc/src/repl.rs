@@ -1,4 +1,4 @@
-use crate::eval::eval;
+use crate::eval::eval_expr;
 use crate::parser::Parser;
 use crate::syntax::Expr;
 use std::io::{self, Write};
@@ -29,7 +29,7 @@ pub fn repl() {
         }
         match parse_expr(input) {
             Ok(expr) => {
-                let result = eval(expr.clone());
+                let result = eval_expr(expr.clone());
                 println!("=> {}", result);
             }
             Err(e) => println!("{}", e),

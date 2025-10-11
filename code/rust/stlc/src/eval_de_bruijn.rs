@@ -120,7 +120,7 @@ pub fn up(expr: DeBruijnExpr, cutoff: usize, len: usize) -> DeBruijnExpr {
     }
 }
 
-pub fn step(expr: DeBruijnExpr) -> Option<DeBruijnExpr> {
+pub fn step_expr(expr: DeBruijnExpr) -> Option<DeBruijnExpr> {
     match expr {
         DeBruijnExpr::Application { func, arg } if (*func).is_lambda() && (*arg).is_value() => {
             if let DeBruijnExpr::Lambda { body, .. } = *func {
@@ -130,13 +130,13 @@ pub fn step(expr: DeBruijnExpr) -> Option<DeBruijnExpr> {
             }
         }
         DeBruijnExpr::Application { func, arg } if (*func).is_value() => {
-            step(*arg).map(|next| DeBruijnExpr::Application {
+            step_expr(*arg).map(|next| DeBruijnExpr::Application {
                 func,
                 arg: Box::new(next),
             })
         }
         DeBruijnExpr::Application { func, arg } if (*arg).is_value() => {
-            step(*func).map(|next| DeBruijnExpr::Application {
+            step_expr(*func).map(|next| DeBruijnExpr::Application {
                 func: Box::new(next),
                 arg,
             })
@@ -147,7 +147,7 @@ pub fn step(expr: DeBruijnExpr) -> Option<DeBruijnExpr> {
             pred,
             conseq,
             alter,
-        } => step(*pred).map(|next| DeBruijnExpr::If {
+        } => step_expr(*pred).map(|next| DeBruijnExpr::If {
             pred: Box::new(next),
             conseq,
             alter,
@@ -181,9 +181,9 @@ fn remove_ctx(expr: DeBruijnExpr) -> DeBruijnExpr {
     }
 }
 
-pub fn eval(mut expr: DeBruijnExpr) -> DeBruijnExpr {
+pub fn eval_expr(mut expr: DeBruijnExpr) -> DeBruijnExpr {
     expr = remove_ctx(expr);
-    while let Some(next) = step(expr.clone()) {
+    while let Some(next) = step_expr(expr.clone()) {
         expr = next;
     }
     expr
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn test_eval_simple1() {
         let expr = parse_expr("(λx => x) True");
-        let result = eval(expr.clone());
+        let result = eval_expr(expr.clone());
         assert_eq!(
             result,
             DeBruijnExpr::Bool {
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn test_eval_simple2() {
         let expr = parse_expr("if False then True else False");
-        let result = eval(expr.clone());
+        let result = eval_expr(expr.clone());
         assert_eq!(
             result,
             DeBruijnExpr::Bool {
@@ -252,13 +252,13 @@ mod tests {
     #[test]
     fn test_eval_simple3() {
         let expr = parse_expr("λx => λy => x");
-        let result = eval(expr.clone());
+        let result = eval_expr(expr.clone());
         assert_eq!(result, remove_ctx(expr));
     }
     #[test]
     fn test_eval_app1() {
         let expr = parse_expr("((λx => λy => x) True) False");
-        let result = eval(expr.clone());
+        let result = eval_expr(expr.clone());
         assert_eq!(
             result,
             DeBruijnExpr::Bool {
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn test_eval_app2() {
         let expr = parse_expr("(λx => x) ((λy => y) True)");
-        let result = eval(expr.clone());
+        let result = eval_expr(expr.clone());
         assert_eq!(
             result,
             DeBruijnExpr::Bool {
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn test_eval_if_lambda() {
         let expr = parse_expr("if True then (λx => x x) else (λx => λy => y)");
-        let result = eval(expr.clone());
+        let result = eval_expr(expr.clone());
         assert_eq!(
             result,
             DeBruijnExpr::Lambda {
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     pub fn test_eval_if_app() {
         let expr = parse_expr("if (λx => x) True then (λy => y) else (λz => False)");
-        let result = eval(expr.clone());
+        let result = eval_expr(expr.clone());
         assert_eq!(
             result,
             DeBruijnExpr::Lambda {
