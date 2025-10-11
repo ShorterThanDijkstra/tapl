@@ -285,10 +285,10 @@ impl fmt::Display for SyntaxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SyntaxError::UnboundIdentifier(name) => {
-                write!(f, "unbound identifier: {}", name)
+                write!(f, "syntax error: unbound identifier: {}", name)
             }
             SyntaxError::VariableLookupFailure(index) => {
-                write!(f, "variable look up failure at {}", index)
+                write!(f, "syntax error: variable look up failure at {}", index)
             }
         }
     }

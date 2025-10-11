@@ -7,7 +7,7 @@ fn up1(expr: DeBruijnExpr) -> DeBruijnExpr {
 fn down1(expr: DeBruijnExpr) -> DeBruijnExpr {
     down(expr, 1)
 }
-
+// [index -> value]expr
 fn substitute(index: usize, value: DeBruijnExpr, expr: DeBruijnExpr) -> DeBruijnExpr {
     match expr {
         DeBruijnExpr::Var { index: index1, .. } => {
@@ -156,7 +156,33 @@ pub fn step(expr: DeBruijnExpr) -> Option<DeBruijnExpr> {
     }
 }
 
+// context makes trouble
+fn remove_ctx(expr: DeBruijnExpr) -> DeBruijnExpr {
+    match expr {
+        DeBruijnExpr::Var { index, .. } => DeBruijnExpr::Var { index, ctx: vec![] },
+        DeBruijnExpr::Bool { b, .. } => DeBruijnExpr::Bool { b, ctx: vec![] },
+        DeBruijnExpr::If {
+            pred,
+            conseq,
+            alter,
+        } => DeBruijnExpr::If {
+            pred: Box::new(remove_ctx(*pred)),
+            conseq: Box::new(remove_ctx(*conseq)),
+            alter: Box::new(remove_ctx(*alter)),
+        },
+        DeBruijnExpr::Application { func, arg } => DeBruijnExpr::Application {
+            func: Box::new(remove_ctx(*func)),
+            arg: Box::new(remove_ctx(*arg)),
+        },
+        DeBruijnExpr::Lambda { param, body } => DeBruijnExpr::Lambda {
+            param,
+            body: Box::new(remove_ctx(*body)),
+        },
+    }
+}
+
 pub fn eval(mut expr: DeBruijnExpr) -> DeBruijnExpr {
+    expr = remove_ctx(expr);
     while let Some(next) = step(expr.clone()) {
         expr = next;
     }
@@ -180,22 +206,115 @@ mod tests {
         }
     }
     #[test]
-    #[should_panic(expected = "SyntaxError")]
+    #[should_panic(expected = "syntax error")]
     fn test_atom1() {
-        let expr = parse_expr("true");
-        let eval = eval(expr.clone());
-        assert_eq!(expr.to_string(), "true");
-        let expr = parse_expr("false");
-        assert_eq!(expr.to_string(), "false");
-        let expr = parse_expr("x");
-        assert_eq!(expr.to_string(), "0");
-        let expr = parse_expr("y");
-        assert_eq!(expr.to_string(), "0");
-        let expr = parse_expr("z");
-        assert_eq!(expr.to_string(), "0");
+        parse_expr("x");
     }
-   
+
+    #[test]
+    fn test_atom2() {
+        let expr = parse_expr("True");
+        assert_eq!(
+            expr,
+            DeBruijnExpr::Bool {
+                b: true,
+                ctx: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn test_eval_simple1() {
+        let expr = parse_expr("(λx => x) True");
+        let result = eval(expr.clone());
+        assert_eq!(
+            result,
+            DeBruijnExpr::Bool {
+                b: true,
+                ctx: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn test_eval_simple2() {
+        let expr = parse_expr("if False then True else False");
+        let result = eval(expr.clone());
+        assert_eq!(
+            result,
+            DeBruijnExpr::Bool {
+                b: false,
+                ctx: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn test_eval_simple3() {
+        let expr = parse_expr("λx => λy => x");
+        let result = eval(expr.clone());
+        assert_eq!(result, remove_ctx(expr));
+    }
+    #[test]
+    fn test_eval_app1() {
+        let expr = parse_expr("((λx => λy => x) True) False");
+        let result = eval(expr.clone());
+        assert_eq!(
+            result,
+            DeBruijnExpr::Bool {
+                b: true,
+                ctx: vec![]
+            }
+        );
+    }
+    #[test]
+    fn test_eval_app2() {
+        let expr = parse_expr("(λx => x) ((λy => y) True)");
+        let result = eval(expr.clone());
+        assert_eq!(
+            result,
+            DeBruijnExpr::Bool {
+                b: true,
+                ctx: vec![]
+            }
+        )
+    }
+
+    #[test]
+    fn test_eval_if_lambda() {
+        let expr = parse_expr("if True then (λx => x x) else (λx => λy => y)");
+        let result = eval(expr.clone());
+        assert_eq!(
+            result,
+            DeBruijnExpr::Lambda {
+                param: "x".to_string(),
+                body: Box::new(DeBruijnExpr::Application {
+                    func: Box::new(DeBruijnExpr::Var {
+                        index: 0,
+                        ctx: vec![]
+                    }),
+                    arg: Box::new(DeBruijnExpr::Var {
+                        index: 0,
+                        ctx: vec![]
+                    }),
+                }),
+            }
+        )
+    }
+
+    #[test]
+    pub fn test_eval_if_app() {
+        let expr = parse_expr("if (λx => x) True then (λy => y) else (λz => False)");
+        let result = eval(expr.clone());
+        assert_eq!(
+            result,
+            DeBruijnExpr::Lambda {
+                param: "y".to_string(),
+                body: Box::new(DeBruijnExpr::Var {
+                    index: 0,
+                    ctx: vec![]
+                }),
+            }
+        )
+    }
 }
-
-
-
