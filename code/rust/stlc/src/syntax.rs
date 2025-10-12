@@ -22,6 +22,7 @@ pub struct Dec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDec {
+    // todo: should be ExprDec
     pub name: String,
     pub ty: Type,
 }
@@ -117,6 +118,10 @@ pub enum DeBruijnExpr {
         index: usize,
         ctx: Vec<String>,
     },
+    UnboundVar {
+        name: String,
+        ctx: Vec<String>,
+    },
     Bool {
         b: bool,
         ctx: Vec<String>,
@@ -134,12 +139,6 @@ pub enum DeBruijnExpr {
         param: String,
         body: Box<DeBruijnExpr>,
     },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum SyntaxError {
-    UnboundIdentifier(String),
-    VariableLookupFailure(usize),
 }
 
 impl fmt::Display for Program {
@@ -260,6 +259,7 @@ impl fmt::Display for DeBruijnExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DeBruijnExpr::Var { index, .. } => write!(f, "{index}"),
+            DeBruijnExpr::UnboundVar { name, .. } => write!(f, "{}", name),
             DeBruijnExpr::Bool { b, .. } => {
                 if *b {
                     write!(f, "True")
@@ -277,19 +277,6 @@ impl fmt::Display for DeBruijnExpr {
             }
             DeBruijnExpr::Application { func, arg } => write!(f, "({} {})", func, arg),
             DeBruijnExpr::Lambda { body, .. } => write!(f, "(λ => {})", body),
-        }
-    }
-}
-
-impl fmt::Display for SyntaxError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SyntaxError::UnboundIdentifier(name) => {
-                write!(f, "syntax error: unbound identifier: {}", name)
-            }
-            SyntaxError::VariableLookupFailure(index) => {
-                write!(f, "syntax error: variable look up failure at {}", index)
-            }
         }
     }
 }
@@ -337,20 +324,21 @@ impl DeBruijnExpr {
             _ => false,
         }
     }
-    pub fn from_expr(expr: Expr) -> Result<DeBruijnExpr, SyntaxError> {
+    pub fn from_expr(expr: Expr) -> DeBruijnExpr {
         Self::from_expr_help(expr, vec![])
     }
-    fn to_expr(&self) -> Result<Expr, SyntaxError> {
+    fn to_expr(&self) -> Option<Expr> {
         match self {
             DeBruijnExpr::Var { index, ctx } => {
                 let len = ctx.len();
                 let index1 = len - *index - 1;
                 match ctx.get(index1) {
-                    Some(name) => Ok(Expr::Var(name.clone())),
-                    None => Err(SyntaxError::VariableLookupFailure(index1)),
+                    Some(name) => Some(Expr::Var(name.clone())),
+                    None => None,
                 }
             }
-            DeBruijnExpr::Bool { b, .. } => Ok(Expr::Bool(*b)),
+            DeBruijnExpr::UnboundVar { name, .. } => Some(Expr::Var(name.clone())),
+            DeBruijnExpr::Bool { b, .. } => Some(Expr::Bool(*b)),
             DeBruijnExpr::If {
                 pred,
                 conseq,
@@ -359,7 +347,7 @@ impl DeBruijnExpr {
                 let pred1 = pred.to_expr()?;
                 let conseq1 = conseq.to_expr()?;
                 let alter1 = alter.to_expr()?;
-                Ok(Expr::If {
+                Some(Expr::If {
                     pred: Box::new(pred1),
                     conseq: Box::new(conseq1),
                     alter: Box::new(alter1),
@@ -368,62 +356,62 @@ impl DeBruijnExpr {
             DeBruijnExpr::Application { func, arg } => {
                 let func1 = func.to_expr()?;
                 let arg1 = arg.to_expr()?;
-                Ok(Expr::Application {
+                Some(Expr::Application {
                     func: Box::new(func1),
                     arg: Box::new(arg1),
                 })
             }
             DeBruijnExpr::Lambda { param, body } => {
                 let body1 = body.to_expr()?;
-                Ok(Expr::Lambda {
+                Some(Expr::Lambda {
                     param: (*param).clone(),
                     body: Box::new(body1),
                 })
             }
         }
     }
-    fn from_expr_help(expr: Expr, mut vars: Vec<String>) -> Result<DeBruijnExpr, SyntaxError> {
+    fn from_expr_help(expr: Expr, mut vars: Vec<String>) -> DeBruijnExpr {
         match expr {
             Expr::Var(name) => {
                 let len = vars.len();
                 match vars.clone().iter().rposition(|x| x == &name) {
                     Some(i) => {
                         let index = len - 1 - i;
-                        Ok(DeBruijnExpr::Var { index, ctx: vars })
+                        DeBruijnExpr::Var { index, ctx: vars }
                     }
-                    None => Err(SyntaxError::UnboundIdentifier(name)),
+                    None => DeBruijnExpr::UnboundVar { name, ctx: vars },
                 }
             }
-            Expr::Bool(b) => Ok(DeBruijnExpr::Bool { b, ctx: vars }),
+            Expr::Bool(b) => DeBruijnExpr::Bool { b, ctx: vars },
             Expr::If {
                 pred,
                 conseq,
                 alter,
             } => {
-                let pred1 = Self::from_expr_help(*pred, vars.clone())?;
-                let conseq1 = Self::from_expr_help(*conseq, vars.clone())?;
-                let alter = Self::from_expr_help(*alter, vars.clone())?;
-                Ok(DeBruijnExpr::If {
+                let pred1 = Self::from_expr_help(*pred, vars.clone());
+                let conseq1 = Self::from_expr_help(*conseq, vars.clone());
+                let alter = Self::from_expr_help(*alter, vars.clone());
+                DeBruijnExpr::If {
                     pred: Box::new(pred1),
                     conseq: Box::new(conseq1),
                     alter: Box::new(alter),
-                })
+                }
             }
             Expr::Application { func, arg } => {
-                let func1 = Self::from_expr_help(*func, vars.clone())?;
-                let arg1 = Self::from_expr_help(*arg, vars.clone())?;
-                Ok(DeBruijnExpr::Application {
+                let func1 = Self::from_expr_help(*func, vars.clone());
+                let arg1 = Self::from_expr_help(*arg, vars.clone());
+                DeBruijnExpr::Application {
                     func: Box::new(func1),
                     arg: Box::new(arg1),
-                })
+                }
             }
             Expr::Lambda { param, body } => {
                 vars.push(param.clone());
-                let body1 = Self::from_expr_help(*body, vars.clone())?;
-                Ok(DeBruijnExpr::Lambda {
+                let body1 = Self::from_expr_help(*body, vars.clone());
+                DeBruijnExpr::Lambda {
                     param,
                     body: Box::new(body1),
-                })
+                }
             }
         }
     }
@@ -433,7 +421,7 @@ mod context_debruijn_tests {
     use super::*;
 
     fn test_from_expr(expr: Expr, expected: DeBruijnExpr) {
-        let result = DeBruijnExpr::from_expr(expr.clone()).unwrap();
+        let result = DeBruijnExpr::from_expr(expr.clone());
         assert_eq!(result, expected);
         // Also test to_expr round-trip
         let expr_back = result.to_expr().unwrap();
@@ -641,7 +629,7 @@ mod context_debruijn_tests {
             }),
         };
 
-        let result = DeBruijnExpr::from_expr(expr.clone()).unwrap();
+        let result = DeBruijnExpr::from_expr(expr.clone());
         let expr_back = result.to_expr().unwrap();
         assert_eq!(expr_back, expr);
     }
@@ -663,7 +651,7 @@ mod context_debruijn_tests {
             }),
         };
 
-        let result = DeBruijnExpr::from_expr(expr.clone()).unwrap();
+        let result = DeBruijnExpr::from_expr(expr.clone());
         let expr_back = result.to_expr().unwrap();
         assert_eq!(expr_back, expr);
     }

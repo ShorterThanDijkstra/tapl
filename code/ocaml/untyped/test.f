@@ -1,4 +1,4 @@
-/* Examples for testing */
+/*/* Examples for testing */
 /*
 x/;
 x;
@@ -15,3 +15,5 @@ x;
 ((lambda x . (x x)) ((lambda y . y) (lambda z . z)));
 */
 ((lambda z . (lambda x . z x)) z);
+*/
+(lambda f . lambda x . f (f (f x))) (lambda f . lambda x . f (f x));

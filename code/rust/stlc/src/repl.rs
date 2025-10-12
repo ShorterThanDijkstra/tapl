@@ -1,6 +1,7 @@
 use crate::eval::eval_expr;
 use crate::parser::Parser;
 use crate::syntax::Expr;
+use crate::eval::Env;
 use std::io::{self, Write};
 fn parse_expr(s: &str) -> Result<Expr, String> {
     let from_str = Parser::from_str(s);
@@ -29,8 +30,11 @@ pub fn repl() {
         }
         match parse_expr(input) {
             Ok(expr) => {
-                let result = eval_expr(expr.clone());
-                println!("=> {}", result);
+                let result = eval_expr(expr.clone(), &Env::new());
+                match result {
+                    Ok(v) => println!("=> {}", v),
+                    Err(e) => println!("{}", e),
+                }
             }
             Err(e) => println!("{}", e),
         }
