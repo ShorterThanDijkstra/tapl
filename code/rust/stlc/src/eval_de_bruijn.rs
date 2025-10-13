@@ -256,7 +256,7 @@ pub fn eval_expr(mut expr: DeBruijnExpr, env: &Env) -> Result<DeBruijnExpr, Eval
 pub fn eval_program(program: Program) -> Result<DeBruijnExpr, EvalError> {
     let mut env = Env::new();
     for dec in program.decs {
-        let debruijn = DeBruijnExpr::from_expr(dec.func_dec.body);
+        let debruijn = DeBruijnExpr::from_expr(dec.expr_dec.body);
         let value = eval_expr(debruijn, &env)?;
         env.insert(dec.name, value);
     }

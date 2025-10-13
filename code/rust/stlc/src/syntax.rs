@@ -1,9 +1,9 @@
 use std::fmt;
 /*
  * Program := Dec Dec*
- * Dec := TypeDec '\n' FuncDec '\n'
+ * Dec := TypeDec '\n' ExprDec '\n'
  * TypeDec := Identifier ':' Type
- * FuncDec := Identifier '=' Expr
+ * ExprDec := Identifier '=' Expr
  * Type := Atom | '(' Type '->' Type ')'
  * Expr := Var | Bool | 'if' Expr 'then' Expr 'else' Expr | 'λ' Identifier '=>' Expr | (Expr) | Expr Expr
  */
@@ -17,25 +17,25 @@ pub struct Program {
 pub struct Dec {
     pub name: String,
     pub ty_dec: TypeDec,
-    pub func_dec: FuncDec,
+    pub expr_dec: ExprDec,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDec {
-    // todo: should be ExprDec
     pub name: String,
     pub ty: Type,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FuncDec {
+pub struct ExprDec {
     pub name: String,
     pub body: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    Prim(String),
+    Var(String),
+    Bool,
     Function { input: Box<Type>, output: Box<Type> },
 }
 
@@ -86,8 +86,8 @@ pub struct CoordTypeDec {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CoordFuncDec {
-    pub func_dec: FuncDec,
+pub struct CoordExprDec {
+    pub expr_dec: ExprDec,
     pub row_start: usize,
     pub col_start: usize,
     pub row_end: usize,
@@ -153,7 +153,7 @@ impl fmt::Display for Program {
 impl fmt::Display for Dec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", self.ty_dec)?;
-        writeln!(f, "{}", self.func_dec)
+        writeln!(f, "{}", self.expr_dec)
     }
 }
 
@@ -163,7 +163,7 @@ impl fmt::Display for TypeDec {
     }
 }
 
-impl fmt::Display for FuncDec {
+impl fmt::Display for ExprDec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} = {}", self.name, self.body)
     }
@@ -172,7 +172,8 @@ impl fmt::Display for FuncDec {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Prim(s) => write!(f, "{s}"),
+            Type::Bool => write!(f, "Bool"),
+            Type::Var(s) => write!(f, "{s}"),
             Type::Function { input, output } => write!(f, "({input} -> {output})"),
         }
     }
@@ -225,12 +226,12 @@ impl fmt::Display for CoordTypeDec {
     }
 }
 
-impl fmt::Display for CoordFuncDec {
+impl fmt::Display for CoordExprDec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{} [{}:{}-{}:{}]",
-            self.func_dec, self.row_start, self.col_start, self.row_end, self.col_end
+            self.expr_dec, self.row_start, self.col_start, self.row_end, self.col_end
         )
     }
 }

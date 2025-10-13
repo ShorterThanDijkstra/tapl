@@ -5,6 +5,7 @@ mod repl;
 mod syntax;
 mod eval_de_bruijn;
 mod repl_de_bruijn;
+mod type_check;
 use crate::parser::Parser as IceParser;
 use crate::eval::eval_program;
 use clap::Parser;

@@ -48,7 +48,7 @@ fn frees(expr: &Expr) -> HashSet<String> {
             frees1.extend(frees2);
             frees1
         }
-        Expr::Lambda { param, body } => {
+        Expr::Lambda { param, body ,..} => {
             let mut frees1 = frees(body);
             frees1.remove(param);
             frees1
@@ -208,8 +208,8 @@ pub fn eval_expr(mut expr: Expr, env: &Env) -> Result<Expr, EvalError>{
 pub fn eval_program(prog: Program) -> Result<Expr, EvalError> {
     let mut env = Env::new();
     for dec in prog.decs {
-        let expr = dec.func_dec.body;
-        let name = dec.func_dec.name;
+        let expr = dec.expr_dec.body;
+        let name = dec.expr_dec.name;
         let value = eval_expr(expr, &env)?;
         env.insert(name, value);
     }

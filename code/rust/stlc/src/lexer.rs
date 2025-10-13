@@ -5,7 +5,8 @@ use std::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Identifier(String),
-    BooleanLiteral(bool),
+    BoolLiteral(bool),
+    BoolType,
     IF,
     THEN,
     ELSE,
@@ -21,9 +22,10 @@ pub enum Token {
 impl Token {
     pub fn size(&self) -> usize {
         match self {
+            Token::BoolType => 4,
             Token::Identifier(s) => s.len(),
-            Token::BooleanLiteral(true) => 4,
-            Token::BooleanLiteral(false) => 5,
+            Token::BoolLiteral(true) => 4,
+            Token::BoolLiteral(false) => 5,
             Token::IF => 2,
             Token::THEN => 4,
             Token::ELSE => 4,
@@ -44,9 +46,10 @@ impl Token {
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::BoolType => write!(f, "Bool"),
             Self::Identifier(str) => write!(f, "{}", str),
-            Self::BooleanLiteral(true) => write!(f, "True"),
-            Self::BooleanLiteral(false) => write!(f, "False"),
+            Self::BoolLiteral(true) => write!(f, "True"),
+            Self::BoolLiteral(false) => write!(f, "False"),
             Self::IF => write!(f, "if"),
             Self::THEN => write!(f, "then"),
             Self::ELSE => write!(f, "else"),
@@ -119,7 +122,7 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    const RESERVED_WORDS: &'static [&'static str] = &["True", "False", "if", "then", "else"];
+    const RESERVED_WORDS: &'static [&'static str] = &["True", "False", "Bool", "if", "then", "else"];
     pub fn new(input: &str) -> Self {
         let chars: Vec<char> = input.chars().collect();
         Self {
@@ -312,8 +315,9 @@ impl Lexer {
                     let col = self.col;
                     let identifier = self.read_identifier().expect("error: next_token");
                     let token = match identifier.as_str() {
-                        "True" => Token::BooleanLiteral(true),
-                        "False" => Token::BooleanLiteral(false),
+                        "True" => Token::BoolLiteral(true),
+                        "False" => Token::BoolLiteral(false),
+                        "Bool" => Token::BoolType,
                         "if" => Token::IF,
                         "then" => Token::THEN,
                         "else" => Token::ELSE,
@@ -418,7 +422,7 @@ mod tests {
             lexer
                 .next_token()
                 .unwrap()
-                .is_token(Token::BooleanLiteral(true))
+                .is_token(Token::BoolLiteral(true))
         );
         assert!(lexer.next_token().unwrap().is_token(Token::EOF));
 
@@ -427,7 +431,7 @@ mod tests {
             lexer
                 .next_token()
                 .unwrap()
-                .is_token(Token::BooleanLiteral(false))
+                .is_token(Token::BoolLiteral(false))
         );
         assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
@@ -490,9 +494,9 @@ mod tests {
         let expected = vec![
             Token::Identifier("f".to_string()),
             Token::Colon,
-            Token::Identifier("Bool".to_string()),
+            Token::BoolType,
             Token::RightArrow,
-            Token::Identifier("Bool".to_string()),
+            Token::BoolType,
             Token::Identifier("f".to_string()),
             Token::Equals,
             Token::Lambda,
@@ -522,8 +526,8 @@ mod tests {
             Token::Identifier("x".to_string()),
             Token::RightParen,
             Token::RightParen,
-            Token::BooleanLiteral(true),
-            Token::BooleanLiteral(false),
+            Token::BoolLiteral(true),
+            Token::BoolLiteral(false),
             Token::EOF,
         ];
 
@@ -539,7 +543,7 @@ mod tests {
         let expecteds = vec![
             Token::Identifier("x".to_string()),
             Token::Colon,
-            Token::Identifier("Bool".to_string()),
+            Token::BoolType,
             Token::EOF,
         ];
         for (token, expected) in zip(tokens, expecteds) {
@@ -553,9 +557,9 @@ mod tests {
         let expected = vec![
             Token::Identifier("x".to_string()),
             Token::Colon,
-            Token::Identifier("Bool".to_string()),
+            Token::BoolType,
             Token::RightArrow,
-            Token::Identifier("Bool".to_string()),
+            Token::BoolType,
             Token::EOF,
         ];
 
@@ -570,7 +574,7 @@ mod tests {
         let expected = vec![
             Token::Identifier("x".to_string()),
             Token::Colon,
-            Token::Identifier("Bool".to_string()),
+            Token::BoolType,
             Token::EOF,
         ];
 
@@ -767,7 +771,7 @@ mod tests {
         let mut lexer = Lexer::new("True");
         match lexer.next_token().unwrap() {
             CoordToken {
-                token: Token::BooleanLiteral(true),
+                token: Token::BoolLiteral(true),
                 ..
             } => {}
             other => panic!("Expected BooleanLiteral(true), got {:?}", other),
@@ -780,7 +784,7 @@ mod tests {
         let mut lexer = Lexer::new("False");
         match lexer.next_token().unwrap() {
             CoordToken {
-                token: Token::BooleanLiteral(false),
+                token: Token::BoolLiteral(false),
                 ..
             } => {}
             other => panic!("Expected BooleanLiteral(false), got {:?}", other),
@@ -831,8 +835,8 @@ mod tests {
             Token::IF,
             Token::THEN,
             Token::ELSE,
-            Token::BooleanLiteral(true),
-            Token::BooleanLiteral(false),
+            Token::BoolLiteral(true),
+            Token::BoolLiteral(false),
             Token::EOF,
         ];
         for expected_token in expected {
