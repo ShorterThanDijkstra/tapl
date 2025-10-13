@@ -1,8 +1,5 @@
 use crate::lexer::{CoordToken, Lexer, LexerError, Token};
-use crate::syntax::{
-    CoordDec, CoordExpr, CoordExprDec, CoordProgram, CoordType, CoordTypeDec, Dec, Expr, ExprDec,
-    Program, Type, TypeDec,
-};
+use crate::syntax::{CoordDef, CoordExpr, CoordProgram, CoordType, Def, Expr, Program, Type};
 use std::cmp::{max, min};
 use std::fs;
 use std::path::Path;
@@ -62,7 +59,7 @@ pub struct Parser {
 enum TypeWrap {
     Epsilon,
     Var {
-        name: String, 
+        name: String,
         token: CoordToken,
     },
     Bool {
@@ -161,6 +158,7 @@ enum ExprWrap {
     },
     Lambda {
         param: String,
+        param_ty: CoordType,
         body: Box<ExprWrap>,
         fst_token: CoordToken,
         last_token: CoordToken,
@@ -221,12 +219,14 @@ impl ExprWrap {
             }),
             ExprWrap::Lambda {
                 param,
+                param_ty,
                 body,
                 fst_token,
                 last_token,
             } => Some(CoordExpr {
                 expr: Expr::Lambda {
                     param: param.clone(),
+                    param_ty: param_ty.ty.clone(),
                     body: Box::new(body.to_expr().unwrap().expr),
                 },
                 row_start: fst_token.row,
@@ -321,35 +321,33 @@ impl Parser {
         }
     }
 
-    // Program := Dec {Dec}
+    // Program := Def* Expr
     pub fn parse_program(&mut self) -> Result<CoordProgram, ParseError> {
-        let mut coord_decs = Vec::new();
+        let mut coord_defs = Vec::new();
         loop {
             if self.peek().is_token(Token::EOF) {
                 return Err(ParseError::InvalidSyntax {
                     message: format!("Program must have a main expression"),
                 });
             }
-            if !(Token::is_identifier(&self.peek().token)
-                && self.look_ahead(1).is_token(Token::Colon))
-            {
+            if !(self.peek().is_token(Token::DEF)) {
                 break;
             }
-            let coord_dec = self.parse_dec()?;
-            coord_decs.push(coord_dec);
+            let coord_def = self.parse_def()?;
+            coord_defs.push(coord_def);
         }
 
         let main = self.parse_expr()?;
-
+        // println!("Parsed main expression: {:?}", main);
         if !self.peek().is_token(Token::EOF) {
             return Err(ParseError::InvalidSyntax {
                 message: format!("Only one main expression is allowed",),
             });
         }
         let program = Program {
-            decs: coord_decs
+            defs: coord_defs
                 .iter()
-                .map(|coord_dec| coord_dec.dec.clone())
+                .map(|coord_def| coord_def.def.clone())
                 .collect(),
             main: main.expr,
         };
@@ -357,14 +355,14 @@ impl Parser {
         let mut col_start = main.col_start;
         let mut row_end = main.row_end;
         let mut col_end = main.col_end;
-        for dec in coord_decs {
-            if row_start >= dec.row_start {
-                row_start = dec.row_start;
-                col_start = min(col_start, dec.col_start);
+        for def in coord_defs {
+            if row_start >= def.row_start {
+                row_start = def.row_start;
+                col_start = min(col_start, def.col_start);
             }
-            if row_end <= dec.row_end {
-                row_end = dec.row_end;
-                col_end = max(col_end, dec.col_end);
+            if row_end <= def.row_end {
+                row_end = def.row_end;
+                col_end = max(col_end, def.col_end);
             }
         }
         let coord_prog = CoordProgram {
@@ -377,133 +375,38 @@ impl Parser {
         Ok(coord_prog)
     }
 
-    /*  fn is_main_dec(coord_dec: &CoordDec) -> bool {
-        let dec = coord_dec.dec.clone();
-    } */
-
-    // Dec := TypeDec "\n" ExprDec
-    fn parse_dec(&mut self) -> Result<CoordDec, ParseError> {
-        let coord_ty_dec = self.parse_type_dec()?;
-        let coord_expr_dec = self.parse_expr_dec()?;
-
-        if coord_ty_dec.col_start != 1 {
-            return Err(ParseError::InvalidSyntax {
-                message: format!(
-                    "Type declaration must start at the beginning of a line, found at row {}, column {}",
-                    coord_ty_dec.row_start, coord_ty_dec.col_start,
-                ),
-            });
-        }
-
-        if coord_expr_dec.col_start != 1 {
-            return Err(ParseError::InvalidSyntax {
-                message: format!(
-                    "Function declaration must start at the beginning of a line, found at row {}, column {}",
-                    coord_expr_dec.row_start, coord_expr_dec.col_start,
-                ),
-            });
-        }
-        if coord_ty_dec.type_dec.name != coord_expr_dec.expr_dec.name {
-            return Err(ParseError::InvalidSyntax {
-                message: format!(
-                    "Type declaration name '{}' does not match function declaration name '{}'",
-                    coord_ty_dec.type_dec.name, coord_expr_dec.expr_dec.name
-                ),
-            });
-        }
-        let dec = Dec {
-            name: coord_ty_dec.type_dec.name.clone(),
-            ty_dec: coord_ty_dec.type_dec,
-            expr_dec: coord_expr_dec.expr_dec,
-        };
-        let row_start = coord_ty_dec.row_start;
-        let col_start = coord_ty_dec.col_start;
-        let row_end = coord_expr_dec.row_end;
-        let col_end = coord_expr_dec.col_end;
-        let coord_dec = CoordDec {
-            dec,
-            row_start,
-            col_start,
-            row_end,
-            col_end,
-        };
-        Ok(coord_dec)
-    }
-
-    // TypeDec := Identifier : Type
-    fn parse_type_dec(&mut self) -> Result<CoordTypeDec, ParseError> {
+    // Def := 'def' Identifier : Type = Expr
+    fn parse_def(&mut self) -> Result<CoordDef, ParseError> {
+        let fst_token = self.expect_token(Token::DEF)?;
         let peek = self.peek();
         match peek {
             CoordToken {
                 token: Token::Identifier(name),
-                row,
-                col,
                 ..
             } => {
                 let name = name.clone();
-                let row_start = row;
-                let col_start = col;
                 self.advance();
                 self.expect_token(Token::Colon)?;
                 let coord_ty = self.parse_type()?;
-                let type_dec = TypeDec {
-                    name,
-                    ty: coord_ty.ty,
-                };
-                let row_end = coord_ty.row_end;
-                let col_end = coord_ty.col_end;
-                let coord_ty_dec = CoordTypeDec {
-                    type_dec,
-                    row_start,
-                    col_start,
-                    row_end,
-                    col_end,
-                };
-                Ok(coord_ty_dec)
-            }
-            t => Err(ParseError::UnexpectedToken {
-                expected: vec![Token::Identifier("?".to_string())],
-                found: t.token.clone(),
-            }),
-        }
-    }
-
-    // ExprDec := Identifier = Expr
-    fn parse_expr_dec(&mut self) -> Result<CoordExprDec, ParseError> {
-        let peek = self.peek();
-        match peek {
-            CoordToken {
-                token: Token::Identifier(name),
-                row,
-                col,
-                ..
-            } => {
-                let name = name.clone();
-                let row_start = row;
-                let col_start = col;
-                self.advance();
                 self.expect_token(Token::Equals)?;
                 let body = self.parse_expr()?;
-                let expr_dec = ExprDec {
-                    name,
-                    body: body.expr,
+                let def = Def {
+                    name: name.clone(),
+                    ty: coord_ty.ty,
+                    expr: body.expr,
                 };
-                let row_end = body.row_end;
-                let col_end = body.col_end;
-                let coord_expr_dec = CoordExprDec {
-                    expr_dec,
-                    row_start,
-                    col_start,
-                    row_end,
-                    col_end,
+                let coord_def = CoordDef {
+                    def,
+                    row_start: fst_token.row,
+                    col_start: fst_token.col,
+                    row_end: body.row_end,
+                    col_end: body.col_end,
                 };
-                Ok(coord_expr_dec)
+                Ok(coord_def)
             }
-            _ => {
-                return Err(ParseError::InvalidSyntax {
-                    message: format!("Type declaration expects identifier"),
-                });
-            }
+            _ => Err(ParseError::InvalidSyntax {
+                message: format!("Definition expects identifier"),
+            }),
         }
     }
 
@@ -563,9 +466,7 @@ impl Parser {
             CoordToken {
                 token: Token::BoolType,
                 ..
-            } => {
-                self.parse_type_wrap_bool()
-            }
+            } => self.parse_type_wrap_bool(),
             CoordToken {
                 token: Token::Identifier(_),
                 ..
@@ -829,7 +730,7 @@ impl Parser {
             _ => Ok(ExprWrap::Epsilon),
         }
     }
-    // ExprWrap := λ Identifier => ExprWrap | Epsilon
+    // ExprWrap := λ Identifier : Type => ExprWrap | Epsilon
     fn parse_expr_wrap_lambda(&mut self) -> Result<ExprWrap, ParseError> {
         let peek = self.peek();
         match peek {
@@ -863,11 +764,15 @@ impl Parser {
                     }
                 };
 
+                self.expect_token(Token::Colon)?;
+
+                let param_ty = self.parse_type()?;
                 self.expect_token(Token::RightArrowDouble)?;
                 let body = self.parse_expr_wrap_non_epsilon()?;
                 let last_token = body.get_last_token();
                 let wrap = ExprWrap::Lambda {
                     param,
+                    param_ty,
                     body: Box::new(body),
                     fst_token,
                     last_token,
@@ -904,7 +809,6 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::*;
     use crate::syntax::*;
 
     // Helper function to create a parser and test type parsing
@@ -1051,10 +955,15 @@ mod tests {
 
     #[test]
     fn test_parse_expr_lambda_simple() {
-        let result = test_parse_expr("\\x => x").unwrap();
+        let result = test_parse_expr("\\x : _ => x").unwrap();
         match result.expr {
-            Expr::Lambda { param, body } => {
+            Expr::Lambda {
+                param,
+                param_ty,
+                body,
+            } => {
                 assert_eq!(param, "x");
+                assert_eq!(param_ty, Type::Var("_".to_string()));
                 assert_eq!(*body, Expr::Var("x".to_string()));
             }
             _ => panic!("Expected lambda expression"),
@@ -1063,10 +972,15 @@ mod tests {
 
     #[test]
     fn test_parse_expr_lambda_unicode() {
-        let result = test_parse_expr("λx => x").unwrap();
+        let result = test_parse_expr("λx : Bool => x").unwrap();
         match result.expr {
-            Expr::Lambda { param, body } => {
+            Expr::Lambda {
+                param,
+                param_ty,
+                body,
+            } => {
                 assert_eq!(param, "x");
+                assert_eq!(param_ty, Type::Bool);
                 assert_eq!(*body, Expr::Var("x".to_string()));
             }
             _ => panic!("Expected lambda expression"),
@@ -1081,10 +995,15 @@ mod tests {
 
     #[test]
     fn test_parse_expr_parenthesized_lambda() {
-        let result = test_parse_expr("(\\x => x)").unwrap();
+        let result = test_parse_expr("(\\x : _ => x)").unwrap();
         match result.expr {
-            Expr::Lambda { param, body } => {
+            Expr::Lambda {
+                param,
+                param_ty,
+                body,
+            } => {
                 assert_eq!(param, "x");
+                assert_eq!(param_ty, Type::Var("_".to_string()));
                 assert_eq!(*body, Expr::Var("x".to_string()));
             }
             _ => panic!("Expected lambda expression"),
@@ -1126,23 +1045,28 @@ mod tests {
 
     #[test]
     fn test_parse_expr_lambda_application() {
-        let result = test_parse_expr("(\\x => x)(\\y => y)").unwrap();
+        let result = test_parse_expr("(\\x : Bool => x)(\\y : Bool => y)").unwrap();
         match result.expr {
             Expr::Application { func, arg } => match (*func, *arg) {
                 (
                     Expr::Lambda {
                         param: p1,
+                        param_ty: ty1,
                         body: b1,
                     },
                     Expr::Lambda {
                         param: p2,
+                        param_ty: ty2,
                         body: b2,
                     },
                 ) => {
                     assert_eq!(p1, "x");
                     assert_eq!(*b1, Expr::Var("x".to_string()));
+                    assert_eq!(ty1, Type::Bool);
+
                     assert_eq!(p2, "y");
                     assert_eq!(*b2, Expr::Var("y".to_string()));
+                    assert_eq!(ty2, Type::Bool);
                 }
                 _ => panic!("Expected lambda applications"),
             },
@@ -1152,7 +1076,7 @@ mod tests {
 
     #[test]
     fn test_parse_expr_complex_application() {
-        let result = test_parse_expr("(\\x => x)(\\y => y)(\\z => z)").unwrap();
+        let result = test_parse_expr("(\\x : _ => x)(\\y : _ => y)(\\z : _ => z)").unwrap();
         match result.expr {
             Expr::Application { func, arg } => {
                 match *func {
@@ -1181,16 +1105,23 @@ mod tests {
 
     #[test]
     fn test_parse_expr_nested_lambda() {
-        let result = test_parse_expr("\\x => \\y => x").unwrap();
+        let result = test_parse_expr("\\x : _ => \\y : _ => x").unwrap();
         match result.expr {
-            Expr::Lambda { param, body } => {
+            Expr::Lambda {
+                param,
+                param_ty,
+                body,
+            } => {
                 assert_eq!(param, "x");
+                assert_eq!(param_ty, Type::Var("_".to_string()));
                 match *body {
                     Expr::Lambda {
                         param: inner_param,
+                        param_ty: inner_param_ty,
                         body: inner_body,
                     } => {
                         assert_eq!(inner_param, "y");
+                        assert_eq!(inner_param_ty, Type::Var("_".to_string()));
                         assert_eq!(*inner_body, Expr::Var("x".to_string()));
                     }
                     _ => panic!("Expected nested lambda"),
@@ -1224,75 +1155,19 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Declaration parsing tests
-    #[test]
-    fn test_parse_type_dec_simple() {
-        let mut parser = Parser::from_str("f : Bool").unwrap();
-        let result = parser.parse_type_dec().unwrap();
-        assert_eq!(result.type_dec.name, "f");
-        assert_eq!(result.type_dec.ty, Type::Bool);
-    }
-
-    #[test]
-    fn test_parse_expr_dec_simple() {
-        let mut parser = Parser::from_str("f = x").unwrap();
-        let result = parser.parse_expr_dec().unwrap();
-        assert_eq!(result.expr_dec.name, "f");
-        assert_eq!(result.expr_dec.body, Expr::Var("x".to_string()));
-    }
-
-    #[test]
-    fn test_parse_dec_complete() {
-        let input = "f : Bool -> Bool\nf = \\x => x";
-        let mut parser = Parser::from_str(input).unwrap();
-        let result = parser.parse_dec().unwrap();
-
-        assert_eq!(result.dec.name, "f");
-        match result.dec.ty_dec.ty {
-            Type::Function { input, output } => {
-                assert_eq!(*input, Type::Bool);
-                assert_eq!(*output, Type::Bool);
-            }
-            _ => panic!("Expected function type"),
-        }
-
-        match result.dec.expr_dec.body {
-            Expr::Lambda { param, body } => {
-                assert_eq!(param, "x");
-                assert_eq!(*body, Expr::Var("x".to_string()));
-            }
-            _ => panic!("Expected lambda expression"),
-        }
-    }
-
-    #[test]
-    fn test_parse_dec_error_mismatched_names() {
-        let input = "f : Bool\ng = x";
-        let mut parser = Parser::from_str(input).unwrap();
-        let result = parser.parse_dec();
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ParseError::InvalidSyntax { message } => {
-                assert!(message.contains("does not match"));
-            }
-            _ => panic!("Expected InvalidSyntax error"),
-        }
-    }
-
     // Program parsing tests
     #[test]
     fn test_parse_program_simple() {
         let input = r#"
-id : Bool -> Bool
-id = \x => x
+def id : Bool = \x : Bool => x
 
 id
 
 "#;
         let result = test_parse_program(input).unwrap();
 
-        assert_eq!(result.program.decs.len(), 1);
-        assert_eq!(result.program.decs[0].name, "id");
+        assert_eq!(result.program.defs.len(), 1);
+        assert_eq!(result.program.defs[0].name, "id");
         /*         assert_eq!(result.program.main.name, "main");
         ) */
     }
@@ -1300,27 +1175,23 @@ id
     #[test]
     fn test_parse_program_multiple_decs() {
         let input = r#"
-id : Bool -> Bool
-id = \x => x
+def id : _ = \x : _ => x
 
-const : Bool -> Bool -> Bool
-const = \x => \y => x
+def const : _ = \x : _ => \y : _ => x
 
 id
 "#;
         let result = test_parse_program(input).unwrap();
 
-        assert_eq!(result.program.decs.len(), 2);
-        assert_eq!(result.program.decs[0].name, "id");
-        assert_eq!(result.program.decs[1].name, "const");
-        // assert_eq!(result.program.main.name, "main");
+        assert_eq!(result.program.defs.len(), 2);
+        assert_eq!(result.program.defs[0].name, "id");
+        assert_eq!(result.program.defs[1].name, "const");
     }
 
     #[test]
     fn test_parse_program_error_no_main() {
         let input = r#"
-id : Bool -> Bool
-id = \x => x
+def id : _ = \x : _ => x
 "#;
         let result = test_parse_program(input);
         assert!(result.is_err());
@@ -1365,60 +1236,22 @@ main = x
     fn test_parse_program_with_comments() {
         let input = r#"
 -- Identity function
-id : Bool -> Bool
-id = \x => x
+def id : _ = \x : _ => x
 
 -- Main program
 id
 "#;
         let result = test_parse_program(input).unwrap();
-        assert_eq!(result.program.decs.len(), 1);
+        assert_eq!(result.program.defs.len(), 1);
         // assert_eq!(result.program.main.name, "main");
     }
 
     #[test]
     fn test_parse_program_mixed_whitespace() {
-        let input = "id : Bool -> Bool\nid = \\x => x\n\n id\nid";
+        let input = "def id : _ ->    \n _ = \\x : _ => x\n\n id\nid";
         let result = test_parse_program(input).unwrap();
-        println!("{:#?}", result);
-        assert_eq!(result.program.decs.len(), 1);
+        assert_eq!(result.program.defs.len(), 1);
         // assert_eq!(result.program.main.name, "main");
-    }
-
-    #[test]
-    fn test_parse_program_complex_types() {
-        let input = r#"
-curry : (Bool -> Bool -> Bool) -> Bool -> Bool -> Bool
-curry = \f => \x => \y => f x y
-
-curry
-
-"#;
-        let result = test_parse_program(input).unwrap();
-
-        // Check that the complex type parsed correctly
-        match &result.program.decs[0].ty_dec.ty {
-            Type::Function { input, output } => match input.as_ref() {
-                Type::Function {
-                    input: inner1,
-                    output: inner2,
-                } => {
-                    assert_eq!(**inner1, Type::Bool);
-                    match inner2.as_ref() {
-                        Type::Function {
-                            input: inner3,
-                            output: inner4,
-                        } => {
-                            assert_eq!(**inner3, Type::Bool);
-                            assert_eq!(**inner4, Type::Bool);
-                        }
-                        _ => panic!("Expected nested function type"),
-                    }
-                }
-                _ => panic!("Expected function type in input"),
-            },
-            _ => panic!("Expected function type"),
-        }
     }
 
     // Error handling tests
@@ -1446,9 +1279,9 @@ curry
 
     #[test]
     fn test_coordinate_tracking() {
-        let input = "  f  :  Bool";
+        let input = "  def f  :  Bool = True";
         let mut parser = Parser::from_str(input).unwrap();
-        let result = parser.parse_type_dec().unwrap();
+        let result = parser.parse_def().unwrap();
 
         // Should track coordinates correctly despite whitespace
         assert_eq!(result.row_start, 1);
@@ -1472,46 +1305,48 @@ curry
     fn test_complex_lambda_calculus_program() {
         let input = r#"
 -- Church booleans
-true : Bool -> Bool -> Bool
-true = \x => \y => x
+def true : _ = \x : _ => \y : _ => x
 
-false : Bool -> Bool -> Bool  
-false = \x => \y => y
+def false : _ = \x : _ => \y : _ => y
 
--- Boolean operations
-and : (Bool -> Bool -> Bool) -> (Bool -> Bool -> Bool) -> Bool -> Bool -> Bool
-and = \p => \q => \x => \y => p (q x y) y
+def and : (Bool -> Bool -> Bool) -> 
+          (Bool -> Bool -> Bool) -> 
+          Bool -> Bool -> Bool = 
+    \p : Bool => \q : Bool => \x : Bool => \y : Bool => p (q x y) y
 
 -- Church numerals
-zero : (Bool -> Bool) -> Bool -> Bool
-zero = \f => \x => x
-one : (Bool -> Bool) -> Bool -> Bool
-one = \f => \x => f x
-two : (Bool -> Bool) -> Bool -> Bool
-two = \f => \x => f (f x)
-three : (Bool -> Bool) -> Bool -> Bool
-three = \f => \x => f (f (f x))
+def zero : (Bool -> Bool) -> Bool -> Bool = \f : _ => \x : _ => x
+def one : (Bool -> Bool) -> Bool -> Bool = \f : _ => \x : _ => f x
+def two : (Bool -> Bool) -> Bool -> Bool = \f : _ => \x : _ => f (f x)
+def three : (Bool -> Bool) -> Bool -> Bool = \f : _ => \x : _ => f (f (f x))
 
 zero
 "#;
         let result = test_parse_program(input).unwrap();
-        assert_eq!(result.program.decs.len(), 7);
+        assert_eq!(result.program.defs.len(), 7);
         // assert_eq!(result.program.main.name, "main");
     }
 
     // Test lambda with =>, not ->
     #[test]
     fn test_lambda_with_double_arrow() {
-        let result = test_parse_expr("\\x => \\y => x").unwrap();
+        let result = test_parse_expr("\\x : _ => \\y : _ => x").unwrap();
         match result.expr {
-            Expr::Lambda { param, body } => {
-                assert_eq!(param, "x");
+            Expr::Lambda {
+                param,
+                param_ty,
+                body,
+            } => {
+                assert_eq!(param, "x"); 
+                assert_eq!(param_ty, Type::Var("_".to_string()));
                 match *body {
                     Expr::Lambda {
                         param: inner_param,
+                        param_ty: inner_param_ty,
                         body: inner_body,
                     } => {
                         assert_eq!(inner_param, "y");
+                        assert_eq!(inner_param_ty, Type::Var("_".to_string()));
                         assert_eq!(*inner_body, Expr::Var("x".to_string()));
                     }
                     _ => panic!("Expected nested lambda"),

@@ -1,35 +1,21 @@
 use std::fmt;
 /*
- * Program := Dec Dec*
- * Dec := TypeDec '\n' ExprDec '\n'
- * TypeDec := Identifier ':' Type
- * ExprDec := Identifier '=' Expr
+ * Program := Def* Expr
+ * Def := 'def' Identifier ':' Type '=' Expr
  * Type := Atom | '(' Type '->' Type ')'
- * Expr := Var | Bool | 'if' Expr 'then' Expr 'else' Expr | 'λ' Identifier '=>' Expr | (Expr) | Expr Expr
+ * Expr := Var | Bool | 'if' Expr 'then' Expr 'else' Expr | 'λ' Identifier : Type '=>' Expr | (Expr) | Expr Expr
  */
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
-    pub decs: Vec<Dec>,
+    pub defs: Vec<Def>,
     pub main: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Dec {
-    pub name: String,
-    pub ty_dec: TypeDec,
-    pub expr_dec: ExprDec,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypeDec {
+pub struct Def {
     pub name: String,
     pub ty: Type,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExprDec {
-    pub name: String,
-    pub body: Expr,
+    pub expr: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +40,7 @@ pub enum Expr {
     },
     Lambda {
         param: String,
+        param_ty: Type,
         body: Box<Expr>,
     },
 }
@@ -68,26 +55,8 @@ pub struct CoordProgram {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CoordDec {
-    pub dec: Dec,
-    pub row_start: usize,
-    pub col_start: usize,
-    pub row_end: usize,
-    pub col_end: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CoordTypeDec {
-    pub type_dec: TypeDec,
-    pub row_start: usize,
-    pub col_start: usize,
-    pub row_end: usize,
-    pub col_end: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CoordExprDec {
-    pub expr_dec: ExprDec,
+pub struct CoordDef {
+    pub def: Def,
     pub row_start: usize,
     pub col_start: usize,
     pub row_end: usize,
@@ -137,35 +106,23 @@ pub enum DeBruijnExpr {
     },
     Lambda {
         param: String,
+        param_ty: Type,
         body: Box<DeBruijnExpr>,
     },
 }
 
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for dec in &self.decs {
-            writeln!(f, "{dec}")?;
+        for def in &self.defs {
+            writeln!(f, "{def}")?;
         }
-        writeln!(f, "main: {}", self.main)
+        writeln!(f, "{}", self.main)
     }
 }
 
-impl fmt::Display for Dec {
+impl fmt::Display for Def {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", self.ty_dec)?;
-        writeln!(f, "{}", self.expr_dec)
-    }
-}
-
-impl fmt::Display for TypeDec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{} : {}", self.name, self.ty)
-    }
-}
-
-impl fmt::Display for ExprDec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} = {}", self.name, self.body)
+        writeln!(f, "def {} : {} = {}", self.name, self.ty, self.expr)
     }
 }
 
@@ -191,7 +148,11 @@ impl fmt::Display for Expr {
                 alter,
             } => write!(f, "if {pred} then {conseq} else {alter}"),
             Expr::Application { func, arg } => write!(f, "({func} {arg})"),
-            Expr::Lambda { param, body } => write!(f, "(λ{param} => {body})"),
+            Expr::Lambda {
+                param,
+                param_ty,
+                body,
+            } => write!(f, "(λ{param} : {param_ty} => {body})"),
         }
     }
 }
@@ -202,36 +163,6 @@ impl fmt::Display for CoordProgram {
             f,
             "{} [{}:{}-{}:{}]",
             self.program, self.row_start, self.col_start, self.row_end, self.col_end
-        )
-    }
-}
-
-impl fmt::Display for CoordDec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} [{}:{}-{}:{}]",
-            self.dec, self.row_start, self.col_start, self.row_end, self.col_end
-        )
-    }
-}
-
-impl fmt::Display for CoordTypeDec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} [{}:{}-{}:{}]",
-            self.type_dec, self.row_start, self.col_start, self.row_end, self.col_end
-        )
-    }
-}
-
-impl fmt::Display for CoordExprDec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} [{}:{}-{}:{}]",
-            self.expr_dec, self.row_start, self.col_start, self.row_end, self.col_end
         )
     }
 }
@@ -362,10 +293,15 @@ impl DeBruijnExpr {
                     arg: Box::new(arg1),
                 })
             }
-            DeBruijnExpr::Lambda { param, body } => {
+            DeBruijnExpr::Lambda {
+                param,
+                param_ty,
+                body,
+            } => {
                 let body1 = body.to_expr()?;
                 Some(Expr::Lambda {
                     param: (*param).clone(),
+                    param_ty: param_ty.clone(),
                     body: Box::new(body1),
                 })
             }
@@ -406,11 +342,16 @@ impl DeBruijnExpr {
                     arg: Box::new(arg1),
                 }
             }
-            Expr::Lambda { param, body } => {
+            Expr::Lambda {
+                param,
+                param_ty,
+                body,
+            } => {
                 vars.push(param.clone());
                 let body1 = Self::from_expr_help(*body, vars.clone());
                 DeBruijnExpr::Lambda {
                     param,
+                    param_ty,
                     body: Box::new(body1),
                 }
             }
@@ -431,18 +372,22 @@ mod context_debruijn_tests {
 
     #[test]
     fn test_simple_identity_lambda() {
-        // λs => λz => z
+        // λs : Bool => λz : Bool => z
         let expr = Expr::Lambda {
             param: "s".to_string(),
+            param_ty: Type::Bool,
             body: Box::new(Expr::Lambda {
                 param: "z".to_string(),
+                param_ty: Type::Bool,
                 body: Box::new(Expr::Var("z".to_string())),
             }),
         };
         let expected = DeBruijnExpr::Lambda {
             param: "s".to_string(),
+            param_ty: Type::Bool,
             body: Box::new(DeBruijnExpr::Lambda {
                 param: "z".to_string(),
+                param_ty: Type::Bool,
                 body: Box::new(DeBruijnExpr::Var {
                     index: 0,
                     ctx: vec!["s".to_string(), "z".to_string()],
@@ -454,11 +399,13 @@ mod context_debruijn_tests {
 
     #[test]
     fn test_simple_application_lambda() {
-        // λs => λz => s (s z)
+        // λs : Bool => λz : Bool => s (s z)
         let expr = Expr::Lambda {
             param: "s".to_string(),
+            param_ty: Type::Bool,
             body: Box::new(Expr::Lambda {
                 param: "z".to_string(),
+                param_ty: Type::Bool,
                 body: Box::new(Expr::Application {
                     func: Box::new(Expr::Var("s".to_string())),
                     arg: Box::new(Expr::Application {
@@ -470,8 +417,10 @@ mod context_debruijn_tests {
         };
         let expected = DeBruijnExpr::Lambda {
             param: "s".to_string(),
+            param_ty: Type::Bool,
             body: Box::new(DeBruijnExpr::Lambda {
                 param: "z".to_string(),
+                param_ty: Type::Bool,
                 body: Box::new(DeBruijnExpr::Application {
                     func: Box::new(DeBruijnExpr::Var {
                         index: 1,
@@ -495,15 +444,20 @@ mod context_debruijn_tests {
 
     #[test]
     fn test_church_add_lambda() {
-        // λm => λn => λs => λz => m s (n z s)
+        // λm : _ => λn : _ => λs : _ => λz : _ => m s (n z s)
         let expr = Expr::Lambda {
             param: "m".to_string(),
+            param_ty: Type::Var("_".to_string()),
             body: Box::new(Expr::Lambda {
                 param: "n".to_string(),
+                param_ty: Type::Var("_".to_string()),
                 body: Box::new(Expr::Lambda {
                     param: "s".to_string(),
+                    param_ty: Type::Var("_".to_string()),
                     body: Box::new(Expr::Lambda {
                         param: "z".to_string(),
+
+                        param_ty: Type::Var("_".to_string()),
                         body: Box::new(Expr::Application {
                             func: Box::new(Expr::Application {
                                 func: Box::new(Expr::Var("m".to_string())),
@@ -523,12 +477,16 @@ mod context_debruijn_tests {
         };
         let expected = DeBruijnExpr::Lambda {
             param: "m".to_string(),
+            param_ty: Type::Var("_".to_string()),
             body: Box::new(DeBruijnExpr::Lambda {
                 param: "n".to_string(),
+                param_ty: Type::Var("_".to_string()),
                 body: Box::new(DeBruijnExpr::Lambda {
                     param: "s".to_string(),
+                    param_ty: Type::Var("_".to_string()),
                     body: Box::new(DeBruijnExpr::Lambda {
                         param: "z".to_string(),
+                        param_ty: Type::Var("_".to_string()),
                         body: Box::new(DeBruijnExpr::Application {
                             func: Box::new(DeBruijnExpr::Application {
                                 func: Box::new(DeBruijnExpr::Var {
@@ -591,15 +549,18 @@ mod context_debruijn_tests {
 
     #[test]
     fn test_y_combinator_lambda() {
-        // λf => (λx => f (λy => (x x) y)) (λx => f (λy => (x x) y))
+        // λf : _  => (λx : _ => f (λy : _ => (x x) y)) (λx : _ => f (λy : _ => (x x) y))
         let expr = Expr::Lambda {
             param: "f".to_string(),
+            param_ty: Type::Var("_".to_string()),
             body: Box::new(Expr::Application {
                 func: Box::new(Expr::Lambda {
                     param: "x".to_string(),
+                    param_ty: Type::Var("_".to_string()),
                     body: Box::new(Expr::Application {
                         func: Box::new(Expr::Var("f".to_string())),
                         arg: Box::new(Expr::Lambda {
+                            param_ty: Type::Var("_".to_string()),
                             param: "y".to_string(),
                             body: Box::new(Expr::Application {
                                 func: Box::new(Expr::Application {
@@ -613,10 +574,12 @@ mod context_debruijn_tests {
                 }),
                 arg: Box::new(Expr::Lambda {
                     param: "x".to_string(),
+                    param_ty: Type::Var("_".to_string()),
                     body: Box::new(Expr::Application {
                         func: Box::new(Expr::Var("f".to_string())),
                         arg: Box::new(Expr::Lambda {
                             param: "y".to_string(),
+                            param_ty: Type::Var("_".to_string()),
                             body: Box::new(Expr::Application {
                                 func: Box::new(Expr::Application {
                                     func: Box::new(Expr::Var("x".to_string())),
@@ -637,17 +600,20 @@ mod context_debruijn_tests {
 
     #[test]
     fn test_shadowing_lambda() {
-        // (λx => (λx => x)) (λx => x)
+        // (λx : _=> (λx : _ => x)) (λx : _ => x)
         let expr = Expr::Application {
             func: Box::new(Expr::Lambda {
                 param: "x".to_string(),
+                param_ty: Type::Var("_".to_string()),
                 body: Box::new(Expr::Lambda {
                     param: "x".to_string(),
+                    param_ty: Type::Var("_".to_string()),
                     body: Box::new(Expr::Var("x".to_string())),
                 }),
             }),
             arg: Box::new(Expr::Lambda {
                 param: "x".to_string(),
+                param_ty: Type::Var("_".to_string()),
                 body: Box::new(Expr::Var("x".to_string())),
             }),
         };

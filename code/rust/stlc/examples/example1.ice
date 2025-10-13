@@ -1,13 +1,9 @@
-zero : (t -> t) -> t -> t
-zero = \f => \x => x
+def zero : (t -> t) -> t -> t = \f : t => \x : t => x
 
-one : (t -> t) -> t -> t
-one = \f => \x => f x
+def one : (t -> t) -> t -> t = \f : t => \x : t => f x
 
-two : (t -> t) -> t -> t
-two = \f => \x => f (f x)
+def two : (t -> t) -> t -> t = \f : t => \x : t => f (f x)
 
-three : (t -> t) -> t -> t
-three = \f => \x => f (f (f x))
+def three : (t -> t) -> t -> t = \f : t => \x : t => f (f (f x))
 
 three two 

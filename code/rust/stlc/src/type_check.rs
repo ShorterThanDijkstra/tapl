@@ -1,4 +1,4 @@
-use crate::syntax::{Expr, Type, TypeDec};
+use crate::syntax::{Expr, Type };
 use core::fmt;
 use std::collections::HashMap;
 
@@ -97,7 +97,7 @@ pub fn check_expr(expr: &Expr, mut ctx: &Context) -> Result<Type, TypeError> {
                 }),
             }
         }
-        Expr::Lambda { param, body } => {
+        Expr::Lambda { param,param_ty, body } => {
             todo!()
         }
     }

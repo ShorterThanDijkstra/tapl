@@ -6,10 +6,11 @@ use std::{
 pub enum Token {
     Identifier(String),
     BoolLiteral(bool),
-    BoolType,
-    IF,
-    THEN,
-    ELSE,
+    BoolType,         // Bool
+    IF,               // if
+    THEN,             // then
+    ELSE,             // else
+    DEF,              // def
     Colon,            // :
     RightArrow,       // ->
     Equals,           // =
@@ -22,6 +23,7 @@ pub enum Token {
 impl Token {
     pub fn size(&self) -> usize {
         match self {
+            Token::DEF => 3,
             Token::BoolType => 4,
             Token::Identifier(s) => s.len(),
             Token::BoolLiteral(true) => 4,
@@ -46,6 +48,7 @@ impl Token {
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DEF => write!(f, "def"),
             Self::BoolType => write!(f, "Bool"),
             Self::Identifier(str) => write!(f, "{}", str),
             Self::BoolLiteral(true) => write!(f, "True"),
@@ -122,7 +125,7 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    const RESERVED_WORDS: &'static [&'static str] = &["True", "False", "Bool", "if", "then", "else"];
+    const RESERVED_WORDS: &'static [&'static str] = &["Def", "True", "False", "Bool", "if", "then", "else"];
     pub fn new(input: &str) -> Self {
         let chars: Vec<char> = input.chars().collect();
         Self {
@@ -315,6 +318,7 @@ impl Lexer {
                     let col = self.col;
                     let identifier = self.read_identifier().expect("error: next_token");
                     let token = match identifier.as_str() {
+                        "def" => Token::DEF,
                         "True" => Token::BoolLiteral(true),
                         "False" => Token::BoolLiteral(false),
                         "Bool" => Token::BoolType,

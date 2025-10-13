@@ -1,7 +1,7 @@
 use core::fmt;
 use std::collections::HashMap;
 
-use crate::syntax::{DeBruijnExpr, Program};
+use crate::syntax::{DeBruijnExpr, Program, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvalError {
@@ -69,10 +69,15 @@ fn substitute(index: usize, value: DeBruijnExpr, expr: DeBruijnExpr) -> DeBruijn
                 arg: Box::new(arg1),
             }
         }
-        DeBruijnExpr::Lambda { param, body } => {
+        DeBruijnExpr::Lambda {
+            param,
+            param_ty,
+            body,
+        } => {
             let body1 = substitute(index + 1, up1(value), *body);
             DeBruijnExpr::Lambda {
                 param,
+                param_ty,
                 body: Box::new(body1),
             }
         }
@@ -111,10 +116,15 @@ pub fn down(expr: DeBruijnExpr, len: usize) -> DeBruijnExpr {
                 arg: Box::new(arg1),
             }
         }
-        DeBruijnExpr::Lambda { param, body } => {
+        DeBruijnExpr::Lambda {
+            param,
+            param_ty,
+            body,
+        } => {
             let body1 = down(*body, len);
             DeBruijnExpr::Lambda {
                 param,
+                param_ty,
                 body: Box::new(body1),
             }
         }
@@ -144,8 +154,13 @@ pub fn up(expr: DeBruijnExpr, cutoff: usize, len: usize) -> DeBruijnExpr {
             func: Box::new(up(*func, cutoff, len)),
             arg: Box::new(up(*arg, cutoff, len)),
         },
-        DeBruijnExpr::Lambda { param, body } => DeBruijnExpr::Lambda {
+        DeBruijnExpr::Lambda {
             param,
+            body,
+            param_ty,
+        } => DeBruijnExpr::Lambda {
+            param,
+            param_ty,
             body: Box::new(up(*body, cutoff + 1, len)),
         },
     }
@@ -155,22 +170,25 @@ pub fn step_expr(expr: DeBruijnExpr, env: &Env) -> Result<Option<DeBruijnExpr>, 
     let expr = match expr {
         DeBruijnExpr::Application { func, arg } => {
             let func = match *func {
-                DeBruijnExpr::UnboundVar{name,ctx} => match env.get(&name) {
+                DeBruijnExpr::UnboundVar { name, ctx } => match env.get(&name) {
                     Some(e) => e.clone(),
-                    None => DeBruijnExpr::UnboundVar { name, ctx, }
+                    None => DeBruijnExpr::UnboundVar { name, ctx },
                 },
                 other => other,
             };
             let arg = match *arg {
-                DeBruijnExpr::UnboundVar{name, ctx} => match env.get(&name) {
+                DeBruijnExpr::UnboundVar { name, ctx } => match env.get(&name) {
                     Some(e) => e.clone(),
-                    None => DeBruijnExpr::UnboundVar { name, ctx, }
+                    None => DeBruijnExpr::UnboundVar { name, ctx },
                 },
                 other => other,
             };
-            DeBruijnExpr::Application { func: Box::new(func), arg: Box::new(arg)}
+            DeBruijnExpr::Application {
+                func: Box::new(func),
+                arg: Box::new(arg),
+            }
         }
-        _ => expr
+        _ => expr,
     };
     match expr {
         DeBruijnExpr::Application { func, arg } if (*func).is_lambda() && (*arg).is_value() => {
@@ -238,8 +256,13 @@ fn remove_ctx(expr: DeBruijnExpr) -> DeBruijnExpr {
             func: Box::new(remove_ctx(*func)),
             arg: Box::new(remove_ctx(*arg)),
         },
-        DeBruijnExpr::Lambda { param, body } => DeBruijnExpr::Lambda {
+        DeBruijnExpr::Lambda {
             param,
+            body,
+            param_ty,
+        } => DeBruijnExpr::Lambda {
+            param,
+            param_ty,
             body: Box::new(remove_ctx(*body)),
         },
     }
@@ -255,10 +278,10 @@ pub fn eval_expr(mut expr: DeBruijnExpr, env: &Env) -> Result<DeBruijnExpr, Eval
 }
 pub fn eval_program(program: Program) -> Result<DeBruijnExpr, EvalError> {
     let mut env = Env::new();
-    for dec in program.decs {
-        let debruijn = DeBruijnExpr::from_expr(dec.expr_dec.body);
+    for def in program.defs {
+        let debruijn = DeBruijnExpr::from_expr(def.expr);
         let value = eval_expr(debruijn, &env)?;
-        env.insert(dec.name, value);
+        env.insert(def.name, value);
     }
     eval_expr(DeBruijnExpr::from_expr(program.main), &env)
 }
@@ -295,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_eval_simple1() {
-        let expr = parse_expr("(λx => x) True");
+        let expr = parse_expr("(λx :Bool=> x) True");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
         assert_eq!(
             result,
@@ -321,13 +344,13 @@ mod tests {
 
     #[test]
     fn test_eval_simple3() {
-        let expr = parse_expr("λx => λy => x");
+        let expr = parse_expr("λx :Bool => λy:Bool => x");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
         assert_eq!(result, remove_ctx(expr));
     }
     #[test]
     fn test_eval_app1() {
-        let expr = parse_expr("((λx => λy => x) True) False");
+        let expr = parse_expr("((λx : Bool => λy : Bool => x) True) False");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
         assert_eq!(
             result,
@@ -339,7 +362,7 @@ mod tests {
     }
     #[test]
     fn test_eval_app2() {
-        let expr = parse_expr("(λx => x) ((λy => y) True)");
+        let expr = parse_expr("(λx : Bool => x) ((λy : Bool => y) True)");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
         assert_eq!(
             result,
@@ -352,12 +375,14 @@ mod tests {
 
     #[test]
     fn test_eval_if_lambda() {
-        let expr = parse_expr("if True then (λx => x x) else (λx => λy => y)");
+        let expr = parse_expr("if True then (λx : _ => x x) else (λx : _ => λy : _ => y)");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
         assert_eq!(
             result,
             DeBruijnExpr::Lambda {
                 param: "x".to_string(),
+
+                param_ty: Type::Var("_".to_string()),
                 body: Box::new(DeBruijnExpr::Application {
                     func: Box::new(DeBruijnExpr::Var {
                         index: 0,
@@ -374,12 +399,13 @@ mod tests {
 
     #[test]
     pub fn test_eval_if_app() {
-        let expr = parse_expr("if (λx => x) True then (λy => y) else (λz => False)");
+        let expr = parse_expr("if (λx : _ => x) True then (λy : _ => y) else (λz : _ => False)");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
         assert_eq!(
             result,
             DeBruijnExpr::Lambda {
                 param: "y".to_string(),
+                param_ty: Type::Var("_".to_string()),
                 body: Box::new(DeBruijnExpr::Var {
                     index: 0,
                     ctx: vec![]

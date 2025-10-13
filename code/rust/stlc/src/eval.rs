@@ -1,4 +1,4 @@
-use crate::syntax::{Expr, Program};
+use crate::syntax::{Expr, Program, Type};
 use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
@@ -16,7 +16,6 @@ impl fmt::Display for EvalError {
             EvalError::UnboundVariable(var) => write!(f, "Eval error: unbound variable: {}", var),
         }
     }
-    
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Env(HashMap<String, Expr>);
@@ -48,7 +47,7 @@ fn frees(expr: &Expr) -> HashSet<String> {
             frees1.extend(frees2);
             frees1
         }
-        Expr::Lambda { param, body ,..} => {
+        Expr::Lambda { param, body, .. } => {
             let mut frees1 = frees(body);
             frees1.remove(param);
             frees1
@@ -101,12 +100,14 @@ pub fn substitute(body: &Expr, x: &str, s: &Expr) -> Expr {
         }
         Expr::Lambda {
             param,
+            param_ty,
             body: inner_body,
         } => {
             if param == x {
                 // x is shadowed, do not substitute inside
                 Expr::Lambda {
                     param: param.clone(),
+                    param_ty: param_ty.clone(),
                     body: inner_body.clone(),
                 }
             } else if frees(s).contains(param) {
@@ -115,12 +116,14 @@ pub fn substitute(body: &Expr, x: &str, s: &Expr) -> Expr {
                 let renamed_body = substitute(&*inner_body, param, &Expr::Var(new_param.clone()));
                 let new_lambda = Expr::Lambda {
                     param: new_param.clone(),
+                    param_ty: param_ty.clone(),
                     body: Box::new(renamed_body),
                 };
                 substitute(&new_lambda, x, s)
             } else {
                 Expr::Lambda {
                     param: param.clone(),
+                    param_ty: param_ty.clone(),
                     body: Box::new(substitute(&*inner_body, x, s)),
                 }
             }
@@ -148,13 +151,13 @@ pub fn step_expr(expr: Expr, env: &Env) -> Result<Option<Expr>, EvalError> {
             Expr::Application {
                 func: Box::new(func),
                 arg: Box::new(arg),
-            }   
+            }
         }
         _ => expr,
     };
     match expr {
         Expr::Application { func, arg } if (*func).is_lambda() && (*arg).is_value() => {
-            if let Expr::Lambda { param, body } = *func {
+            if let Expr::Lambda { param, body, .. } = *func {
                 Ok(Some(substitute(&*body, &param, &*arg)))
             } else {
                 unreachable!()
@@ -167,7 +170,7 @@ pub fn step_expr(expr: Expr, env: &Env) -> Result<Option<Expr>, EvalError> {
                 arg: Box::new(next),
             }))
         }
-        
+
         Expr::Application { func, arg } if (*arg).is_value() => {
             let next = step_expr(*func, env)?;
             Ok(next.map(|next| Expr::Application {
@@ -189,17 +192,15 @@ pub fn step_expr(expr: Expr, env: &Env) -> Result<Option<Expr>, EvalError> {
                 alter,
             }))
         }
-        Expr::Var(name) => {
-            match env.get(&name) {
-                Some(e) => Ok(Some(e.clone())),
-                None => Err(EvalError::UnboundVariable(name)),
-            }
-        }
+        Expr::Var(name) => match env.get(&name) {
+            Some(e) => Ok(Some(e.clone())),
+            None => Err(EvalError::UnboundVariable(name)),
+        },
         _ => Ok(None),
     }
 }
 
-pub fn eval_expr(mut expr: Expr, env: &Env) -> Result<Expr, EvalError>{
+pub fn eval_expr(mut expr: Expr, env: &Env) -> Result<Expr, EvalError> {
     while let Some(next) = step_expr(expr.clone(), env)? {
         expr = next;
     }
@@ -207,9 +208,9 @@ pub fn eval_expr(mut expr: Expr, env: &Env) -> Result<Expr, EvalError>{
 }
 pub fn eval_program(prog: Program) -> Result<Expr, EvalError> {
     let mut env = Env::new();
-    for dec in prog.decs {
-        let expr = dec.expr_dec.body;
-        let name = dec.expr_dec.name;
+    for def in prog.defs {
+        let expr = def.expr;
+        let name = def.name;
         let value = eval_expr(expr, &env)?;
         env.insert(name, value);
     }
@@ -230,13 +231,17 @@ mod tests {
         let expr = Expr::Var("x".to_string());
         let res = eval_expr(expr.clone(), &Env::new());
         assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), EvalError::UnboundVariable("x".to_string())); 
+        assert_eq!(
+            res.unwrap_err(),
+            EvalError::UnboundVariable("x".to_string())
+        );
     }
 
     #[test]
     fn test_eval_lambda_is_value() {
         let expr = Expr::Lambda {
             param: "x".to_string(),
+            param_ty: Type::Var("_".to_string()),
             body: Box::new(Expr::Var("x".to_string())),
         };
         assert_eq!(eval_expr(expr.clone(), &Env::new()).unwrap(), expr);
@@ -244,10 +249,11 @@ mod tests {
 
     #[test]
     fn test_eval_application_simple() {
-        // (λx => x) true ==> true
+        // (λx : Bool => x) true ==> true
         let expr = Expr::Application {
             func: Box::new(Expr::Lambda {
                 param: "x".to_string(),
+                param_ty: Type::Bool,
                 body: Box::new(Expr::Var("x".to_string())),
             }),
             arg: Box::new(Expr::Bool(true)),
@@ -257,13 +263,15 @@ mod tests {
 
     #[test]
     fn test_eval_nested_application() {
-        // ((λx => λy => x) true) false ==> λy => true
+        // ((λx : Bool => λy : Bool => x) true) false ==> true
         let expr = Expr::Application {
             func: Box::new(Expr::Application {
                 func: Box::new(Expr::Lambda {
                     param: "x".to_string(),
+                    param_ty: Type::Bool,
                     body: Box::new(Expr::Lambda {
                         param: "y".to_string(),
+                        param_ty: Type::Bool,
                         body: Box::new(Expr::Var("x".to_string())),
                     }),
                 }),
@@ -277,15 +285,17 @@ mod tests {
 
     #[test]
     fn test_eval_application_with_non_value_arg() {
-        // (λx => x) ((λy => y) true) ==> true
+        // (λx : Bool => x) ((λy : Bool => y) true) ==> true
         let expr = Expr::Application {
             func: Box::new(Expr::Lambda {
                 param: "x".to_string(),
+                param_ty: Type::Bool,
                 body: Box::new(Expr::Var("x".to_string())),
             }),
             arg: Box::new(Expr::Application {
                 func: Box::new(Expr::Lambda {
                     param: "y".to_string(),
+                    param_ty: Type::Bool,
                     body: Box::new(Expr::Var("y".to_string())),
                 }),
                 arg: Box::new(Expr::Bool(true)),
@@ -296,12 +306,14 @@ mod tests {
 
     #[test]
     fn test_eval_lambda_shadowing() {
-        // (λx => λx => x) true ==> λx => x
+        // (λx : Bool => λx : Bool => x) true ==> λx => x
         let expr = Expr::Application {
             func: Box::new(Expr::Lambda {
                 param: "x".to_string(),
+                param_ty: Type::Bool,
                 body: Box::new(Expr::Lambda {
                     param: "x".to_string(),
+                    param_ty: Type::Bool,
                     body: Box::new(Expr::Var("x".to_string())),
                 }),
             }),
@@ -309,6 +321,7 @@ mod tests {
         };
         let expected = Expr::Lambda {
             param: "x".to_string(),
+            param_ty: Type::Bool,
             body: Box::new(Expr::Var("x".to_string())),
         };
         assert_eq!(eval_expr(expr, &Env::new()).unwrap(), expected);
@@ -352,11 +365,12 @@ mod tests {
 
     #[test]
     fn test_eval_if_with_application_predicate() {
-        // if ((λx => x) True) then False else True ==> False
+        // if ((λx : Bool => x) True) then False else True ==> False
         let expr = Expr::If {
             pred: Box::new(Expr::Application {
                 func: Box::new(Expr::Lambda {
                     param: "x".to_string(),
+                    param_ty: Type::Bool,
                     body: Box::new(Expr::Var("x".to_string())),
                 }),
                 arg: Box::new(Expr::Bool(true)),

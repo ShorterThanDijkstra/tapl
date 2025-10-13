@@ -1,10 +1,7 @@
-zero : (t -> t) -> t -> t
-zero = \f => \x => x
+def zero : (t -> t) -> t -> t= \f : t => \x : t => x
 
-x : (t -> t) -> t -> t
-x = id zero
+def id : t -> t = \x : t=> x
 
-id : t -> t
-id = \x => x
+def x : (t -> t) -> t -> t= id zero
 
 x
