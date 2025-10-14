@@ -330,7 +330,7 @@ impl Parser {
                     message: format!("Program must have a main expression"),
                 });
             }
-            if !(self.peek().is_token(Token::DEF)) {
+            if !(self.peek().is_token(Token::Def)) {
                 break;
             }
             let coord_def = self.parse_def()?;
@@ -377,7 +377,7 @@ impl Parser {
 
     // Def := 'def' Identifier : Type = Expr
     fn parse_def(&mut self) -> Result<CoordDef, ParseError> {
-        let fst_token = self.expect_token(Token::DEF)?;
+        let fst_token = self.expect_token(Token::Def)?;
         let peek = self.peek();
         match peek {
             CoordToken {
@@ -634,7 +634,7 @@ impl Parser {
             } => Ok(self.parse_expr_wrap_bool()?),
 
             CoordToken {
-                token: Token::IF, ..
+                token: Token::If, ..
             } => Ok(self.parse_expr_wrap_if()?),
             CoordToken {
                 token: Token::Lambda,
@@ -705,22 +705,22 @@ impl Parser {
         let peek = self.peek();
         match peek {
             CoordToken {
-                token: Token::IF,
+                token: Token::If,
                 row,
                 col,
                 ..
             } => {
                 let fst_token = CoordToken {
-                    token: Token::IF,
+                    token: Token::If,
                     row,
                     col,
                     size: 2,
                 };
                 self.advance();
                 let pred = self.parse_expr_wrap_non_epsilon()?;
-                self.expect_token(Token::THEN)?;
+                self.expect_token(Token::Then)?;
                 let conseq = self.parse_expr_wrap_non_epsilon()?;
-                self.expect_token(Token::ELSE)?;
+                self.expect_token(Token::Else)?;
                 let alter = self.parse_expr_wrap_non_epsilon()?;
                 let last_token = alter.get_last_token();
                 Ok(ExprWrap::If {

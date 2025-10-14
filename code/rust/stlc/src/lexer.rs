@@ -7,10 +7,10 @@ pub enum Token {
     Identifier(String),
     BoolLiteral(bool),
     BoolType,         // Bool
-    IF,               // if
-    THEN,             // then
-    ELSE,             // else
-    DEF,              // def
+    If,               // if
+    Then,             // then
+    Else,             // else
+    Def,              // def
     Colon,            // :
     RightArrow,       // ->
     Equals,           // =
@@ -23,14 +23,14 @@ pub enum Token {
 impl Token {
     pub fn size(&self) -> usize {
         match self {
-            Token::DEF => 3,
+            Token::Def => 3,
             Token::BoolType => 4,
             Token::Identifier(s) => s.len(),
             Token::BoolLiteral(true) => 4,
             Token::BoolLiteral(false) => 5,
-            Token::IF => 2,
-            Token::THEN => 4,
-            Token::ELSE => 4,
+            Token::If => 2,
+            Token::Then => 4,
+            Token::Else => 4,
             Token::Colon => 1,
             Token::RightArrow => 2,
             Token::Equals => 1,
@@ -48,14 +48,14 @@ impl Token {
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DEF => write!(f, "def"),
+            Self::Def => write!(f, "def"),
             Self::BoolType => write!(f, "Bool"),
             Self::Identifier(str) => write!(f, "{}", str),
             Self::BoolLiteral(true) => write!(f, "True"),
             Self::BoolLiteral(false) => write!(f, "False"),
-            Self::IF => write!(f, "if"),
-            Self::THEN => write!(f, "then"),
-            Self::ELSE => write!(f, "else"),
+            Self::If => write!(f, "if"),
+            Self::Then => write!(f, "then"),
+            Self::Else => write!(f, "else"),
             Self::Colon => write!(f, ":"),
             Self::RightArrow => write!(f, "->"),
             Self::Equals => write!(f, "="),
@@ -90,20 +90,12 @@ impl CoordToken {
 
 #[derive(Debug, PartialEq)]
 pub enum LexerError {
-    UnexpectedChar { expected: Vec<char>, found: char },
     UnknownChar { found: char },
 }
 
 impl fmt::Display for LexerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LexerError::UnexpectedChar { expected, found } => {
-                write!(
-                    f,
-                    "Unexpected character: expected one of {:?}, found '{}'",
-                    expected, found
-                )
-            }
             LexerError::UnknownChar { found } => {
                 let display_char = if *found == REPLACEMENT_CHARACTER {
                     "\\u{FFFD}".to_string()
@@ -114,7 +106,6 @@ impl fmt::Display for LexerError {
             }
         }
     }
-    
 }
 
 pub struct Lexer {
@@ -125,7 +116,9 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    const RESERVED_WORDS: &'static [&'static str] = &["Def", "True", "False", "Bool", "if", "then", "else"];
+    const RESERVED_WORDS: &'static [&'static str] =
+        &["Def", "True", "False", "Bool", "if", "then", "else"];
+    // todo : buffer
     pub fn new(input: &str) -> Self {
         let chars: Vec<char> = input.chars().collect();
         Self {
@@ -201,7 +194,7 @@ impl Lexer {
         }
     }
 
-    fn skip_comment(&mut self) {
+    fn skip_line_comment(&mut self) {
         if self.peek() != Some('-') {
             return;
         }
@@ -216,6 +209,31 @@ impl Lexer {
             }
         }
     }
+    fn skip_block_comment(&mut self) {
+        if self.peek_many(2) != Some("/*".to_string()) {
+            return;
+        }
+        self.advance_many(2);
+        let mut depth = 0;
+        loop {
+            if self.peek() == None {
+                return;
+            } else if self.peek_many(2) == Some("/*".to_string()) {
+                depth += 1;
+                self.advance_many(2);
+            } else if self.peek_many(2) == Some("*/".to_string()) {
+                if depth == 0 {
+                    self.advance_many(2);
+                    return;
+                } else {
+                    self.advance_many(2);
+                    depth -= 1;
+                }
+            } else {
+                self.advance();
+            }
+        }
+    }
 
     fn is_identifier_start(c: char) -> bool {
         c.is_ascii_alphabetic() || c == '_'
@@ -225,120 +243,241 @@ impl Lexer {
         c.is_ascii_alphanumeric() || c == '_'
     }
 
-    fn read_identifier(&mut self) -> Option<String> {
+    fn lex_identifier(&mut self) -> Option<CoordToken> {
         let fst = self.peek()?;
         if !Self::is_identifier_start(fst) {
             return None;
         }
-        let mut result = String::new();
-        result.push(fst);
+        let row = self.row;
+        let col = self.col;
+        let mut identifier = String::new();
+        identifier.push(fst);
         self.advance();
-        while let Some(ch) = self.peek() {
-            if Self::is_identifier_rest(ch) {
-                result.push(ch);
-                self.advance();
-            } else {
-                break;
+        loop {
+            match self.peek() {
+                Some(c) => {
+                    if Self::is_identifier_rest(c) {
+                        identifier.push(c);
+
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                None => break,
             }
         }
-        Some(result)
+
+        let token = match identifier.as_str() {
+            "def" => Token::Def,
+            "True" => Token::BoolLiteral(true),
+            "False" => Token::BoolLiteral(false),
+            "Bool" => Token::BoolType,
+            "if" => Token::If,
+            "then" => Token::Then,
+            "else" => Token::Else,
+            _ => {
+                assert!(!Self::RESERVED_WORDS.contains(&identifier.as_str()));
+                Token::Identifier(identifier)
+            }
+        };
+        let size = *&token.size();
+        Some(CoordToken {
+            token,
+            row,
+            col,
+            size,
+        })
     }
 
+    fn lex_char(&mut self) -> Option<CoordToken> {
+        self.skip_whitespaces();
+        match self.peek() {
+            Some('=') => {
+                let token = self.wrap_token(Token::Equals);
+                self.advance();
+                Some(token)
+            }
+            Some(':') => {
+                let token = self.wrap_token(Token::Colon);
+                self.advance();
+                Some(token)
+            }
+            Some('\\') | Some('λ') => {
+                let token = self.wrap_token(Token::Lambda);
+                self.advance();
+                Some(token)
+            }
+            Some('(') => {
+                let token = self.wrap_token(Token::LeftParen);
+                self.advance();
+                Some(token)
+            }
+            Some(')') => {
+                let token = self.wrap_token(Token::RightParen);
+                self.advance();
+                Some(token)
+            }
+            _ => None,
+        }
+    }
+
+    fn lex_two_chars(&mut self) -> Option<CoordToken> {
+        match self.peek_many(2) {
+            Some(s) => match s.as_str() {
+                "->" => {
+                    let token = self.wrap_token(Token::RightArrow);
+                    self.advance_many(2);
+                    Some(token)
+                }
+                "=>" => {
+                    let token = self.wrap_token(Token::RightArrowDouble);
+                    self.advance_many(2);
+                    Some(token)
+                }
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    fn lex_eof(&mut self) -> Option<CoordToken> {
+        match self.peek() {
+            Some(_) => None,
+            None => Some(self.wrap_token(Token::EOF)),
+        }
+    }
     pub fn next_token(&mut self) -> Result<CoordToken, LexerError> {
         loop {
             self.skip_whitespaces();
-            match self.peek() {
-                None => {
-                    return Ok(self.wrap_token(Token::EOF));
-                }
-                Some('-') => {
-                    let next_pos = self.position + 1;
-                    match self.input.get(next_pos) {
-                        Some('-') => {
-                            self.skip_comment();
-                            continue;
-                        }
-                        Some('>') => {
-                            let token = self.wrap_token(Token::RightArrow);
-                            self.advance_many(2);
-                            return Ok(token);
-                        }
-                        Some(other) => {
-                            return Err(LexerError::UnexpectedChar {
-                                expected: vec!['-', '>'],
-                                found: *other,
-                            });
-                        }
-                        None => {
-                            return Err(LexerError::UnexpectedChar {
-                                expected: vec!['-', '>'],
-                                found: '\0',
-                            });
-                        }
+            match self.peek_many(2) {
+                Some(s) => match s.as_str() {
+                    "--" => {
+                        self.skip_line_comment();
                     }
-                }
-                Some('=') => {
-                    let next_pos = self.position + 1;
-                    match self.input.get(next_pos) {
-                        Some('>') => {
-                            let token = self.wrap_token(Token::RightArrowDouble);
-                            self.advance_many(2);
-                            return Ok(token);
-                        }
-                        _ => {
-                            let token = self.wrap_token(Token::Equals);
-                            self.advance();
-                            return Ok(token);
-                        }
+                    "/*" => {
+                        self.skip_block_comment();
                     }
-                }
-                Some(':') => {
-                    let token = self.wrap_token(Token::Colon);
-                    self.advance();
-                    return Ok(token);
-                }
-
-                Some('\\') | Some('λ') => {
-                    let token = self.wrap_token(Token::Lambda);
-                    self.advance();
-                    return Ok(token);
-                }
-                Some('(') => {
-                    let token = self.wrap_token(Token::LeftParen);
-                    self.advance();
-                    return Ok(token);
-                }
-                Some(')') => {
-                    let token = self.wrap_token(Token::RightParen);
-                    self.advance();
-                    return Ok(token);
-                }
-                Some(ch) if Self::is_identifier_start(ch) => {
-                    let row = self.row;
-                    let col = self.col;
-                    let identifier = self.read_identifier().expect("error: next_token");
-                    let token = match identifier.as_str() {
-                        "def" => Token::DEF,
-                        "True" => Token::BoolLiteral(true),
-                        "False" => Token::BoolLiteral(false),
-                        "Bool" => Token::BoolType,
-                        "if" => Token::IF,
-                        "then" => Token::THEN,
-                        "else" => Token::ELSE,
-                        _ => {
-                            assert!(!Self::RESERVED_WORDS.contains(&identifier.as_str()));
-                            Token::Identifier(identifier)
-                        }
-                    };
-                    let coord_token = self.wrap_token_row_col(token, row, col);
-                    return Ok(coord_token);
-                }
-                Some(ch) => {
-                    return Err(LexerError::UnknownChar { found: ch });
-                }
+                    _ => break,
+                },
+                None => break,
             }
         }
+
+        // the order maters
+        if let Some(token) = self.lex_eof() {
+            return Ok(token);
+        }
+        if let Some(token) = self.lex_identifier() {
+            return Ok(token);
+        }
+        if let Some(token) = self.lex_two_chars() {
+            return Ok(token);
+        }
+        if let Some(token) = self.lex_char() {
+            return Ok(token);
+        }
+
+        match self.peek() {
+            Some(c) => Err(LexerError::UnknownChar { found: c }),
+            None => Ok(self.wrap_token(Token::EOF)),
+        }
     }
+    // pub fn next_token(&mut self) -> Result<CoordToken, LexerError> {
+    //     loop {
+    //         self.skip_whitespaces();
+    //         match self.peek() {
+    //             None => {
+    //                 return Ok(self.wrap_token(Token::EOF));
+    //             }
+    //             Some('-') => {
+    //                 let next_pos = self.position + 1;
+    //                 match self.input.get(next_pos) {
+    //                     Some('-') => {
+    //                         self.skip_comment();
+    //                         continue;
+    //                     }
+    //                     Some('>') => {
+    //                         let token = self.wrap_token(Token::RightArrow);
+    //                         self.advance_many(2);
+    //                         return Ok(token);
+    //                     }
+    //                     Some(other) => {
+    //                         return Err(LexerError::UnexpectedChar {
+    //                             expected: vec!['-', '>'],
+    //                             found: *other,
+    //                         });
+    //                     }
+    //                     None => {
+    //                         return Err(LexerError::UnexpectedChar {
+    //                             expected: vec!['-', '>'],
+    //                             found: '\0',
+    //                         });
+    //                     }
+    //                 }
+    //             }
+    //             Some('=') => {
+    //                 let next_pos = self.position + 1;
+    //                 match self.input.get(next_pos) {
+    //                     Some('>') => {
+    //                         let token = self.wrap_token(Token::RightArrowDouble);
+    //                         self.advance_many(2);
+    //                         return Ok(token);
+    //                     }
+    //                     _ => {
+    //                         let token = self.wrap_token(Token::Equals);
+    //                         self.advance();
+    //                         return Ok(token);
+    //                     }
+    //                 }
+    //             }
+    //             Some(':') => {
+    //                 let token = self.wrap_token(Token::Colon);
+    //                 self.advance();
+    //                 return Ok(token);
+    //             }
+
+    //             Some('\\') | Some('λ') => {
+    //                 let token = self.wrap_token(Token::Lambda);
+    //                 self.advance();
+    //                 return Ok(token);
+    //             }
+    //             Some('(') => {
+    //                 let token = self.wrap_token(Token::LeftParen);
+    //                 self.advance();
+    //                 return Ok(token);
+    //             }
+    //             Some(')') => {
+    //                 let token = self.wrap_token(Token::RightParen);
+    //                 self.advance();
+    //                 return Ok(token);
+    //             }
+    //             Some(ch) if Self::is_identifier_start(ch) => {
+    //                 let row = self.row;
+    //                 let col = self.col;
+    //                 let identifier = self.read_identifier().expect("error: next_token");
+    //                 let token = match identifier.as_str() {
+    //                     "def" => Token::DEF,
+    //                     "True" => Token::BoolLiteral(true),
+    //                     "False" => Token::BoolLiteral(false),
+    //                     "Bool" => Token::BoolType,
+    //                     "if" => Token::IF,
+    //                     "then" => Token::THEN,
+    //                     "else" => Token::ELSE,
+    //                     _ => {
+    //                         assert!(!Self::RESERVED_WORDS.contains(&identifier.as_str()));
+    //                         Token::Identifier(identifier)
+    //                     }
+    //                 };
+    //                 let coord_token = self.wrap_token_row_col(token, row, col);
+    //                 return Ok(coord_token);
+    //             }
+    //             Some(ch) => {
+    //                 return Err(LexerError::UnknownChar { found: ch });
+    //             }
+    //         }
+    //     }
+    // }
 
     pub fn tokenize(&mut self) -> Result<Vec<CoordToken>, LexerError> {
         let mut tokens = Vec::new();
@@ -511,7 +650,9 @@ mod tests {
         ];
 
         for expected_token in expected {
-            assert!(lexer.next_token().unwrap().is_token(expected_token));
+            let next = lexer.next_token();
+            println!("{:?}", next);
+            assert!(next.unwrap().is_token(expected_token));
         }
     }
 
@@ -584,53 +725,6 @@ mod tests {
 
         for expected_token in expected {
             assert!(lexer.next_token().unwrap().is_token(expected_token));
-        }
-    }
-
-    // 错误情况测试
-    #[test]
-    fn test_unexpected_character() {
-        let mut lexer = Lexer::new("@");
-        match lexer.next_token() {
-            Err(LexerError::UnexpectedChar { found, .. }) => assert_eq!(found, '@'),
-            Err(LexerError::UnknownChar { found }) => assert_eq!(found, '@'),
-            Ok(token) => panic!("Expected error, got token: {:?}", token),
-        }
-    }
-
-    #[test]
-    fn test_dash_without_arrow_or_comment() {
-        let mut lexer = Lexer::new("-x");
-        match lexer.next_token() {
-            Err(LexerError::UnexpectedChar { found, expected }) => {
-                assert_eq!(found, 'x');
-                assert_eq!(expected, vec!['-', '>']);
-            }
-            Err(LexerError::UnknownChar { found }) => {
-                panic!(
-                    "Expected UnexpectedChar error, got UnknownChar({:?}) error",
-                    found
-                )
-            }
-            Ok(token) => panic!("Expected error, got token: {:?}", token),
-        }
-    }
-
-    #[test]
-    fn test_dash_at_end() {
-        let mut lexer = Lexer::new("-");
-        match lexer.next_token() {
-            Err(LexerError::UnexpectedChar { expected, .. }) => {
-                assert_eq!(expected, vec!['-', '>']);
-            }
-
-            Err(LexerError::UnknownChar { found }) => {
-                panic!(
-                    "Expected UnexpectedChar error, got UnknownChar({:?}) error",
-                    found
-                )
-            }
-            Ok(token) => panic!("Expected error, got token: {:?}", token),
         }
     }
 
@@ -801,7 +895,7 @@ mod tests {
         let mut lexer = Lexer::new("if");
         match lexer.next_token().unwrap() {
             CoordToken {
-                token: Token::IF, ..
+                token: Token::If, ..
             } => {}
             other => panic!("Expected IF, got {:?}", other),
         }
@@ -813,7 +907,7 @@ mod tests {
         let mut lexer = Lexer::new("then");
         match lexer.next_token().unwrap() {
             CoordToken {
-                token: Token::THEN, ..
+                token: Token::Then, ..
             } => {}
             other => panic!("Expected THEN, got {:?}", other),
         }
@@ -825,7 +919,7 @@ mod tests {
         let mut lexer = Lexer::new("else");
         match lexer.next_token().unwrap() {
             CoordToken {
-                token: Token::ELSE, ..
+                token: Token::Else, ..
             } => {}
             other => panic!("Expected ELSE, got {:?}", other),
         }
@@ -836,9 +930,9 @@ mod tests {
     fn test_reserved_words_mixed() {
         let mut lexer = Lexer::new("if then else True False");
         let expected = vec![
-            Token::IF,
-            Token::THEN,
-            Token::ELSE,
+            Token::If,
+            Token::Then,
+            Token::Else,
             Token::BoolLiteral(true),
             Token::BoolLiteral(false),
             Token::EOF,
@@ -846,5 +940,19 @@ mod tests {
         for expected_token in expected {
             assert!(lexer.next_token().unwrap().is_token(expected_token));
         }
+    }
+    // test for block comments /* nested /* comments */ are ignored *
+    #[test]
+    fn test_block_comments() {
+        let mut lexer = Lexer::new(
+            "/* this is a comment /* this is a nested comment */ /* this is another nested comment */*/ x",
+        );
+        assert!(
+            lexer
+                .next_token()
+                .unwrap()
+                .is_token(Token::Identifier("x".to_string())),
+        );
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 }
