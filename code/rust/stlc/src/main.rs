@@ -8,6 +8,7 @@ mod repl_de_bruijn;
 mod type_check;
 use crate::parser::Parser as IceParser;
 use crate::eval::eval_program;
+use crate::type_check::check_program;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -20,6 +21,13 @@ struct Args {
 fn eval_file() {
     let args = Args::parse();
     let program = IceParser::from_file(&args.file).unwrap().parse_program().unwrap().program;
+    let check = check_program(&program);
+    if !check.is_empty() {
+        for e in check {
+            eprintln!("{}", e);
+        }
+        return;
+    }
     let res = eval_program(program); 
     match res {
         Ok(v) => println!("{}", v),
@@ -38,6 +46,6 @@ fn debruijn_eval_file() {
 fn main() {
     // repl::repl();
     // repl_de_bruijn::repl();
-    // eval_file();
-    debruijn_eval_file();
+    eval_file();
+    // debruijn_eval_file();
 }

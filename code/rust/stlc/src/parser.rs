@@ -386,13 +386,17 @@ impl Parser {
             } => {
                 let name = name.clone();
                 self.advance();
-                self.expect_token(Token::Colon)?;
-                let coord_ty = self.parse_type()?;
+                let mut def_ty = None;
+                if self.peek().is_token(Token::Colon) {
+                    self.expect_token(Token::Colon)?;
+                    let coord_ty = self.parse_type()?;
+                    def_ty = Some(coord_ty.ty);
+                }
                 self.expect_token(Token::Equals)?;
                 let body = self.parse_expr()?;
                 let def = Def {
                     name: name.clone(),
-                    ty: coord_ty.ty,
+                    ty: def_ty,
                     expr: body.expr,
                 };
                 let coord_def = CoordDef {
@@ -1337,7 +1341,7 @@ zero
                 param_ty,
                 body,
             } => {
-                assert_eq!(param, "x"); 
+                assert_eq!(param, "x");
                 assert_eq!(param_ty, Type::Var("_".to_string()));
                 match *body {
                     Expr::Lambda {

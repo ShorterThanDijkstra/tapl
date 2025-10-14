@@ -1,7 +1,7 @@
 use std::fmt;
 /*
  * Program := Def* Expr
- * Def := 'def' Identifier ':' Type '=' Expr
+ * Def := 'def' Identifier [':' Type] '=' Expr
  * Type := Atom | '(' Type '->' Type ')'
  * Expr := Var | Bool | 'if' Expr 'then' Expr 'else' Expr | 'λ' Identifier : Type '=>' Expr | (Expr) | Expr Expr
  */
@@ -14,7 +14,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Def {
     pub name: String,
-    pub ty: Type,
+    pub ty: Option<Type>,
     pub expr: Expr,
 }
 
@@ -122,7 +122,10 @@ impl fmt::Display for Program {
 
 impl fmt::Display for Def {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "def {} : {} = {}", self.name, self.ty, self.expr)
+        if let Some(ty) = &self.ty {
+            writeln!(f, "def {} : {} = {}", self.name, ty, self.expr);
+        }
+        writeln!(f, "def {} = {}", self.name, self.expr)
     }
 }
 
