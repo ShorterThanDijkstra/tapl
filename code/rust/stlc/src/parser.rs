@@ -1421,4 +1421,12 @@ zero
         let result = test_parse_expr("if True then x y");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_parse_program_def_if() {
+        let input = r#"def f : Bool -> Bool = \b : Bool => if b then False else True
+f"#;
+        let result = test_parse_program(input).unwrap();
+        assert_eq!(result.program.defs.len(), 1);
+    }
 }

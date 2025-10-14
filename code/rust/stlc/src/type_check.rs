@@ -170,6 +170,10 @@ pub fn check_program(program: &Program) -> Vec<TypeError> {
             }
         }
     }
+    match check_expr(&program.main, &ctx) {
+        Ok(_) => {}
+        Err(e) => errs.push(e),
+    };
     errs.into_iter().rev().collect()
 }
 #[cfg(test)]
