@@ -28,8 +28,8 @@ impl Env {
     }
 }
 
-fn up1(expr: DeBruijnExpr) -> DeBruijnExpr {
-    up(expr, 0, 1)
+fn up1(expr: DeBruijnExpr, param: String) -> DeBruijnExpr {
+    up(expr, 0, 1, vec![param])
 }
 
 fn down1(expr: DeBruijnExpr) -> DeBruijnExpr {
@@ -45,7 +45,7 @@ fn substitute(index: usize, value: DeBruijnExpr, expr: DeBruijnExpr) -> DeBruijn
                 expr
             }
         }
-        DeBruijnExpr::UnboundVar { name, ctx } => DeBruijnExpr::UnboundVar { name, ctx },
+        DeBruijnExpr::UnboundVar(name) => DeBruijnExpr::UnboundVar(name),
         DeBruijnExpr::Bool { .. } => expr,
         DeBruijnExpr::If {
             pred,
@@ -74,7 +74,7 @@ fn substitute(index: usize, value: DeBruijnExpr, expr: DeBruijnExpr) -> DeBruijn
             param_ty,
             body,
         } => {
-            let body1 = substitute(index + 1, up1(value), *body);
+            let body1 = substitute(index + 1, up1(value, param.clone()), *body);
             DeBruijnExpr::Lambda {
                 param,
                 param_ty,
@@ -86,14 +86,21 @@ fn substitute(index: usize, value: DeBruijnExpr, expr: DeBruijnExpr) -> DeBruijn
 pub fn down(expr: DeBruijnExpr, len: usize) -> DeBruijnExpr {
     match expr {
         DeBruijnExpr::Var { index, ctx } => {
+            let mut ctx = ctx.clone();
+            for _ in 0..len {
+                if ctx.is_empty() {
+                    break;
+                }
+                ctx.pop();
+            }
             let new_index = if index < len { 0 } else { index - len };
             DeBruijnExpr::Var {
                 index: new_index,
                 ctx,
             }
         }
-        DeBruijnExpr::UnboundVar { .. } => expr,
-        DeBruijnExpr::Bool { .. } => expr,
+        DeBruijnExpr::UnboundVar(name) => DeBruijnExpr::UnboundVar(name),
+        DeBruijnExpr::Bool(b) => DeBruijnExpr::Bool(b),
         DeBruijnExpr::If {
             pred,
             conseq,
@@ -130,39 +137,44 @@ pub fn down(expr: DeBruijnExpr, len: usize) -> DeBruijnExpr {
         }
     }
 }
-pub fn up(expr: DeBruijnExpr, cutoff: usize, len: usize) -> DeBruijnExpr {
+
+pub fn up(expr: DeBruijnExpr, cutoff: usize, len: usize, ctx: Vec<String>) -> DeBruijnExpr {
     match expr {
-        DeBruijnExpr::Var { index, ctx } => {
+        DeBruijnExpr::Var { index, .. } => {
             let new_index = if index < cutoff { index } else { index + len };
             DeBruijnExpr::Var {
                 index: new_index,
                 ctx,
             }
         }
-        DeBruijnExpr::UnboundVar { .. } => expr,
-        DeBruijnExpr::Bool { .. } => expr,
+        DeBruijnExpr::UnboundVar(name) => DeBruijnExpr::UnboundVar(name),
+        DeBruijnExpr::Bool(b) => DeBruijnExpr::Bool(b),
         DeBruijnExpr::If {
             pred,
             conseq,
             alter,
         } => DeBruijnExpr::If {
-            pred: Box::new(up(*pred, cutoff, len)),
-            conseq: Box::new(up(*conseq, cutoff, len)),
-            alter: Box::new(up(*alter, cutoff, len)),
+            pred: Box::new(up(*pred, cutoff, len, ctx.clone())),
+            conseq: Box::new(up(*conseq, cutoff, len, ctx.clone())),
+            alter: Box::new(up(*alter, cutoff, len, ctx.clone())),
         },
         DeBruijnExpr::Application { func, arg } => DeBruijnExpr::Application {
-            func: Box::new(up(*func, cutoff, len)),
-            arg: Box::new(up(*arg, cutoff, len)),
+            func: Box::new(up(*func, cutoff, len, ctx.clone())),
+            arg: Box::new(up(*arg, cutoff, len, ctx.clone())),
         },
         DeBruijnExpr::Lambda {
             param,
             body,
             param_ty,
-        } => DeBruijnExpr::Lambda {
-            param,
-            param_ty,
-            body: Box::new(up(*body, cutoff + 1, len)),
-        },
+        } => {
+            let mut ctx = ctx.clone();
+            ctx.push(param.clone());
+            DeBruijnExpr::Lambda {
+                param,
+                param_ty,
+                body: Box::new(up(*body, cutoff + 1, len, ctx)),
+            }
+        }
     }
 }
 
@@ -170,16 +182,16 @@ pub fn step_expr(expr: DeBruijnExpr, env: &Env) -> Result<Option<DeBruijnExpr>, 
     let expr = match expr {
         DeBruijnExpr::Application { func, arg } => {
             let func = match *func {
-                DeBruijnExpr::UnboundVar { name, ctx } => match env.get(&name) {
+                DeBruijnExpr::UnboundVar(name) => match env.get(&name) {
                     Some(e) => e.clone(),
-                    None => DeBruijnExpr::UnboundVar { name, ctx },
+                    None => DeBruijnExpr::UnboundVar(name),
                 },
                 other => other,
             };
             let arg = match *arg {
-                DeBruijnExpr::UnboundVar { name, ctx } => match env.get(&name) {
+                DeBruijnExpr::UnboundVar(name) => match env.get(&name) {
                     Some(e) => e.clone(),
-                    None => DeBruijnExpr::UnboundVar { name, ctx },
+                    None => DeBruijnExpr::UnboundVar(name),
                 },
                 other => other,
             };
@@ -192,8 +204,8 @@ pub fn step_expr(expr: DeBruijnExpr, env: &Env) -> Result<Option<DeBruijnExpr>, 
     };
     match expr {
         DeBruijnExpr::Application { func, arg } if (*func).is_lambda() && (*arg).is_value() => {
-            if let DeBruijnExpr::Lambda { body, .. } = *func {
-                Ok(Some(down1(substitute(0, up1(*arg), *body))))
+            if let DeBruijnExpr::Lambda { body, param, .. } = *func {
+                Ok(Some(down1(substitute(0, up1(*arg, param), *body))))
             } else {
                 unreachable!()
             }
@@ -226,7 +238,7 @@ pub fn step_expr(expr: DeBruijnExpr, env: &Env) -> Result<Option<DeBruijnExpr>, 
                 alter,
             }))
         }
-        DeBruijnExpr::UnboundVar { name, .. } => {
+        DeBruijnExpr::UnboundVar(name) => {
             if let Some(value) = env.get(&name) {
                 Ok(Some(value.clone()))
             } else {
@@ -237,45 +249,14 @@ pub fn step_expr(expr: DeBruijnExpr, env: &Env) -> Result<Option<DeBruijnExpr>, 
     }
 }
 
-// context makes trouble
-fn remove_ctx(expr: DeBruijnExpr) -> DeBruijnExpr {
-    match expr {
-        DeBruijnExpr::Var { index, .. } => DeBruijnExpr::Var { index, ctx: vec![] },
-        DeBruijnExpr::UnboundVar { name, .. } => DeBruijnExpr::UnboundVar { name, ctx: vec![] },
-        DeBruijnExpr::Bool { b, .. } => DeBruijnExpr::Bool { b, ctx: vec![] },
-        DeBruijnExpr::If {
-            pred,
-            conseq,
-            alter,
-        } => DeBruijnExpr::If {
-            pred: Box::new(remove_ctx(*pred)),
-            conseq: Box::new(remove_ctx(*conseq)),
-            alter: Box::new(remove_ctx(*alter)),
-        },
-        DeBruijnExpr::Application { func, arg } => DeBruijnExpr::Application {
-            func: Box::new(remove_ctx(*func)),
-            arg: Box::new(remove_ctx(*arg)),
-        },
-        DeBruijnExpr::Lambda {
-            param,
-            body,
-            param_ty,
-        } => DeBruijnExpr::Lambda {
-            param,
-            param_ty,
-            body: Box::new(remove_ctx(*body)),
-        },
-    }
-}
-
 pub fn eval_expr(mut expr: DeBruijnExpr, env: &Env) -> Result<DeBruijnExpr, EvalError> {
-    expr = remove_ctx(expr);
     while let Some(next) = step_expr(expr.clone(), env)? {
         expr = next;
     }
     assert!(expr.is_value());
     Ok(expr)
 }
+
 pub fn eval_program(program: Program) -> Result<DeBruijnExpr, EvalError> {
     let mut env = Env::new();
     for def in program.defs {
@@ -285,6 +266,7 @@ pub fn eval_program(program: Program) -> Result<DeBruijnExpr, EvalError> {
     }
     eval_expr(DeBruijnExpr::from_expr(program.main), &env)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,70 +289,40 @@ mod tests {
     #[test]
     fn test_atom2() {
         let expr = parse_expr("True");
-        assert_eq!(
-            expr,
-            DeBruijnExpr::Bool {
-                b: true,
-                ctx: vec![]
-            }
-        );
+        assert_eq!(expr, DeBruijnExpr::Bool(true));
     }
 
     #[test]
     fn test_eval_simple1() {
         let expr = parse_expr("(λx :Bool=> x) True");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
-        assert_eq!(
-            result,
-            DeBruijnExpr::Bool {
-                b: true,
-                ctx: vec![]
-            }
-        );
+        assert_eq!(result, DeBruijnExpr::Bool(true));
     }
 
     #[test]
     fn test_eval_simple2() {
         let expr = parse_expr("if False then True else False");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
-        assert_eq!(
-            result,
-            DeBruijnExpr::Bool {
-                b: false,
-                ctx: vec![]
-            }
-        );
+        assert_eq!(result, DeBruijnExpr::Bool(false));
     }
 
     #[test]
     fn test_eval_simple3() {
         let expr = parse_expr("λx :Bool => λy:Bool => x");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
-        assert_eq!(result, remove_ctx(expr));
+        assert_eq!(result, expr);
     }
     #[test]
     fn test_eval_app1() {
         let expr = parse_expr("((λx : Bool => λy : Bool => x) True) False");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
-        assert_eq!(
-            result,
-            DeBruijnExpr::Bool {
-                b: true,
-                ctx: vec![]
-            }
-        );
+        assert_eq!(result, DeBruijnExpr::Bool(true));
     }
     #[test]
     fn test_eval_app2() {
         let expr = parse_expr("(λx : Bool => x) ((λy : Bool => y) True)");
         let result = eval_expr(expr.clone(), &Env::new()).unwrap();
-        assert_eq!(
-            result,
-            DeBruijnExpr::Bool {
-                b: true,
-                ctx: vec![]
-            }
-        )
+        assert_eq!(result, DeBruijnExpr::Bool(true))
     }
 
     #[test]
@@ -386,11 +338,11 @@ mod tests {
                 body: Box::new(DeBruijnExpr::Application {
                     func: Box::new(DeBruijnExpr::Var {
                         index: 0,
-                        ctx: vec![]
+                        ctx: vec!["x".to_string()]
                     }),
                     arg: Box::new(DeBruijnExpr::Var {
                         index: 0,
-                        ctx: vec![]
+                        ctx: vec!["x".to_string()]
                     }),
                 }),
             }
@@ -408,8 +360,30 @@ mod tests {
                 param_ty: Type::Var("_".to_string()),
                 body: Box::new(DeBruijnExpr::Var {
                     index: 0,
-                    ctx: vec![]
+                    ctx: vec!["y".to_string()]
                 }),
+            }
+        )
+    }
+    // test ctx is correctly maintained
+
+    #[test]
+    fn test_ctx1() {
+        let expr = parse_expr("λx : Bool => λy : Bool => x");
+        let result = eval_expr(expr.clone(), &Env::new()).unwrap();
+        assert_eq!(result, expr);
+    }
+
+    #[test]
+    fn test_ctx2() {
+        let expr = parse_expr("(λx : Bool => λy : Bool => x) True");
+        let result = eval_expr(expr.clone(), &Env::new()).unwrap();
+        assert_eq!(
+            result,
+            DeBruijnExpr::Lambda {
+                param: "y".to_string(),
+                param_ty: Type::Bool,
+                body: Box::new(DeBruijnExpr::Bool(true))
             }
         )
     }

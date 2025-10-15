@@ -87,14 +87,8 @@ pub enum DeBruijnExpr {
         index: usize,
         ctx: Vec<String>,
     },
-    UnboundVar {
-        name: String,
-        ctx: Vec<String>,
-    },
-    Bool {
-        b: bool,
-        ctx: Vec<String>,
-    },
+    UnboundVar(String),
+    Bool(bool),
     If {
         pred: Box<DeBruijnExpr>,
         conseq: Box<DeBruijnExpr>,
@@ -194,8 +188,8 @@ impl fmt::Display for DeBruijnExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DeBruijnExpr::Var { index, .. } => write!(f, "{index}"),
-            DeBruijnExpr::UnboundVar { name, .. } => write!(f, "{}", name),
-            DeBruijnExpr::Bool { b, .. } => {
+            DeBruijnExpr::UnboundVar(name) => write!(f, "{}", name),
+            DeBruijnExpr::Bool(b) => {
                 if *b {
                     write!(f, "True")
                 } else {
@@ -249,13 +243,13 @@ impl DeBruijnExpr {
     }
     pub fn is_true(&self) -> bool {
         match self {
-            DeBruijnExpr::Bool { b, .. } => *b,
+            DeBruijnExpr::Bool(b) => *b,
             _ => false,
         }
     }
     pub fn is_false(&self) -> bool {
         match self {
-            DeBruijnExpr::Bool { b, .. } => !*b,
+            DeBruijnExpr::Bool(b) => !*b,
             _ => false,
         }
     }
@@ -272,8 +266,8 @@ impl DeBruijnExpr {
                     None => None,
                 }
             }
-            DeBruijnExpr::UnboundVar { name, .. } => Some(Expr::Var(name.clone())),
-            DeBruijnExpr::Bool { b, .. } => Some(Expr::Bool(*b)),
+            DeBruijnExpr::UnboundVar(name) => Some(Expr::Var(name.clone())),
+            DeBruijnExpr::Bool(b) => Some(Expr::Bool(*b)),
             DeBruijnExpr::If {
                 pred,
                 conseq,
@@ -319,10 +313,10 @@ impl DeBruijnExpr {
                         let index = len - 1 - i;
                         DeBruijnExpr::Var { index, ctx: vars }
                     }
-                    None => DeBruijnExpr::UnboundVar { name, ctx: vars },
+                    None => DeBruijnExpr::UnboundVar(name),
                 }
             }
-            Expr::Bool(b) => DeBruijnExpr::Bool { b, ctx: vars },
+            Expr::Bool(b) => DeBruijnExpr::Bool(b),
             Expr::If {
                 pred,
                 conseq,
