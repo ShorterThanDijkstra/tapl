@@ -23,70 +23,89 @@ pub enum TypeError {
     ParameterTypeMismatch {
         expected: Type,
         found: Type,
+        def_name: String,
     },
     ExpectedFunctionType {
         found: Type,
+        def_name: String,
     },
     ConditionalGuardNotBool {
         found: Type,
+        def_name: String,
     },
     BranchesTypeMismatch {
         then_ty: Type,
         else_ty: Type,
+        def_name: String,
     },
-    UnknownTypeforVariable(String),
+    UnknownTypeOfVariable {
+        name: String,
+        def_name: String,
+    },
     DefinitionTypeMismatch {
         expected: Type,
         found: Type,
-        name: String,
+        def_name: String,
     },
 }
 
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            TypeError::ParameterTypeMismatch {
+                expected,
+                found,
+                def_name,
+            } => write!(
+                f,
+                "In definition '{}': Parameter type mismatch: expected {}, found {}",
+                def_name, expected, found
+            ),
+            TypeError::ExpectedFunctionType { found, def_name } => write!(
+                f,
+                "In definition '{}': Expected a function type, but found {}",
+                def_name, found
+            ),
+            TypeError::ConditionalGuardNotBool { found, def_name } => write!(
+                f,
+                "In definition '{}': Conditional guard is not of type Bool: found {}",
+                def_name, found
+            ),
+            TypeError::BranchesTypeMismatch {
+                then_ty,
+                else_ty,
+                def_name,
+            } => write!(
+                f,
+                "In definition '{}': Branches of conditional have mismatched types: then is {}, else is {}",
+                def_name, then_ty, else_ty
+            ),
+            TypeError::UnknownTypeOfVariable { name, def_name } => write!(
+                f,
+                "In definition '{}': Unknown type of variable '{}'",
+                def_name, name
+            ),
             TypeError::DefinitionTypeMismatch {
                 expected,
                 found,
-                name,
-            } => {
-                write!(
-                    f,
-                    "Definition '{}' type mismatch: expected {}, found {}",
-                    name, expected, found
-                )
-            }
-            TypeError::ParameterTypeMismatch { expected, found } => {
-                write!(
-                    f,
-                    "Parameter type mismatch: expected {}, found {}",
-                    expected, found
-                )
-            }
-            TypeError::ExpectedFunctionType { found } => {
-                write!(f, "Expected function type, found {}", found)
-            }
-            TypeError::ConditionalGuardNotBool { found } => {
-                write!(f, "Conditional guard must be of type Bool, found {}", found)
-            }
-            TypeError::BranchesTypeMismatch { then_ty, else_ty } => {
-                write!(
-                    f,
-                    "Branches of conditional must have the same type: then branch is {}, else branch is {}",
-                    then_ty, else_ty
-                )
-            }
-            TypeError::UnknownTypeforVariable(name) => {
-                write!(f, "Unknown type for variable: {}", name)
-            }
+                def_name,
+            } => write!(
+                f,
+                "In definition '{}': Definition type mismatch: expected {}, found {}",
+                def_name, expected, found
+            ),
         }
     }
 }
-pub fn check_expr(expr: &Expr, ctx: &Context) -> Result<Type, TypeError> {
+
+pub fn check_expr(expr: &Expr, ctx: &Context, def_name: String) -> Result<Type, TypeError> {
     match expr {
         Expr::Var(name) => match ctx.get(&name) {
             Some(ty) => Ok(ty.clone()),
-            None => Err(TypeError::UnknownTypeforVariable(name.clone())),
+            None => Err(TypeError::UnknownTypeOfVariable {
+                name: name.clone(),
+                def_name: def_name.clone(),
+            }),
         },
         Expr::Bool(_) => Ok(Type::Bool),
         Expr::If {
@@ -94,37 +113,41 @@ pub fn check_expr(expr: &Expr, ctx: &Context) -> Result<Type, TypeError> {
             conseq,
             alter,
         } => {
-            let pred_ty = check_expr(&*pred, ctx)?;
+            let pred_ty = check_expr(&*pred, ctx, def_name.clone())?;
             if pred_ty != Type::Bool {
                 return Err(TypeError::ConditionalGuardNotBool {
                     found: pred_ty.clone(),
+                    def_name: def_name.clone(),
                 });
             }
-            let conseq_ty = check_expr(&*conseq, ctx)?;
-            let alter_ty = check_expr(&*alter, ctx)?;
+            let conseq_ty = check_expr(&*conseq, ctx, def_name.clone())?;
+            let alter_ty = check_expr(&*alter, ctx, def_name.clone())?;
             if conseq_ty != alter_ty {
                 return Err(TypeError::BranchesTypeMismatch {
                     then_ty: conseq_ty,
                     else_ty: alter_ty,
+                    def_name: def_name.clone(),
                 });
             }
             Ok(conseq_ty)
         }
         Expr::Application { func, arg } => {
-            let func_ty = check_expr(&*func, ctx)?;
+            let func_ty = check_expr(&*func, ctx, def_name.clone())?;
             match func_ty {
                 Type::Function { input, output } => {
-                    let arg_ty = check_expr(&*arg, ctx)?;
+                    let arg_ty = check_expr(&*arg, ctx, def_name.clone())?;
                     if *input != arg_ty {
                         return Err(TypeError::ParameterTypeMismatch {
                             expected: arg_ty,
                             found: *input,
+                            def_name: def_name.clone(),
                         });
                     }
                     Ok(*output)
                 }
                 _ => Err(TypeError::ExpectedFunctionType {
                     found: func_ty.clone(),
+                    def_name: def_name.clone(),
                 }),
             }
         }
@@ -135,7 +158,7 @@ pub fn check_expr(expr: &Expr, ctx: &Context) -> Result<Type, TypeError> {
         } => {
             let mut new_ctx = (*ctx).clone();
             new_ctx.add(param.to_string(), (*param_ty).clone());
-            let body_ty = check_expr(&*body, &new_ctx)?;
+            let body_ty = check_expr(&*body, &new_ctx, def_name)?;
             Ok(Type::Function {
                 input: Box::new(param_ty.clone()),
                 output: Box::new(body_ty),
@@ -144,49 +167,53 @@ pub fn check_expr(expr: &Expr, ctx: &Context) -> Result<Type, TypeError> {
     }
 }
 
-pub fn check_program(program: &Program) -> Vec<TypeError> {
+pub fn check_program(program: &Program) -> Result<Type, Vec<TypeError>> {
     let mut ctx = Context::new();
     let mut errs = vec![];
     for def in &program.defs {
-        let res = check_expr(&def.expr, &ctx);
+        if let Some(ty) = &def.ty {
+            ctx.add(def.name.clone(), ty.clone());
+        }
+    }
+    for def in &program.defs {
+        let res = check_expr(&def.expr, &ctx, def.name.clone());
         match res {
             Ok(ty) => {
                 if let Some(def_ty) = &def.ty {
                     if *def_ty != ty {
                         errs.push(TypeError::DefinitionTypeMismatch {
                             expected: def_ty.clone(),
-                            found: ty,
-                            name: def.name.clone(),
+                            found: ty.clone(),
+                            def_name: def.name.clone(),
                         });
                     }
-                    ctx.add(def.name.clone(), def_ty.clone());
                 }
+                ctx.add(def.name.clone(), ty);
             }
             Err(e) => {
                 errs.push(e);
-                if let Some(def_ty) = &def.ty {
-                    ctx.add(def.name.clone(), def_ty.clone());
-                }
             }
         }
     }
-    match check_expr(&program.main, &ctx) {
-        Ok(_) => {}
-        Err(e) => errs.push(e),
-    };
-    errs.into_iter().rev().collect()
+    match check_expr(&program.main, &ctx, "main".to_string()) {
+        Ok(main_ty) => Ok(main_ty),
+        Err(e) => {
+            errs.push(e);
+            Err(errs.into_iter().rev().collect())
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::{Def, Expr, Program, Type};
+    use crate::syntax::{Expr, Type};
 
     #[test]
     fn test_check_expr_var() {
         let mut ctx = Context::new();
         ctx.add("x".to_string(), Type::Bool);
         let expr = Expr::Var("x".to_string());
-        let ty = check_expr(&expr, &ctx).unwrap();
+        let ty = check_expr(&expr, &ctx, "main".to_string()).unwrap();
         assert_eq!(ty, Type::Bool);
     }
 
@@ -197,7 +224,7 @@ mod tests {
             conseq: Box::new(Expr::Bool(false)),
             alter: Box::new(Expr::Bool(true)),
         };
-        let ty = check_expr(&expr, &Context::new()).unwrap();
+        let ty = check_expr(&expr, &Context::new(), "main".to_string()).unwrap();
         assert_eq!(ty, Type::Bool);
     }
 
@@ -216,9 +243,11 @@ mod tests {
                 output: Box::new(Type::Bool),
             },
         );
-        let err = check_expr(&expr, &ctx).unwrap_err();
+        let err = check_expr(&expr, &ctx, "main".to_string()).unwrap_err();
         match err {
-            TypeError::BranchesTypeMismatch { then_ty, else_ty } => {
+            TypeError::BranchesTypeMismatch {
+                then_ty, else_ty, ..
+            } => {
                 assert_eq!(then_ty, Type::Bool);
                 assert_eq!(
                     else_ty,
@@ -242,7 +271,7 @@ mod tests {
             }),
             arg: Box::new(Expr::Bool(true)),
         };
-        let ty = check_expr(&expr, &Context::new()).unwrap();
+        let ty = check_expr(&expr, &Context::new(), "main".to_string()).unwrap();
         assert_eq!(ty, Type::Bool);
     }
 }

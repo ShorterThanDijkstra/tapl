@@ -941,7 +941,7 @@ mod tests {
             assert!(lexer.next_token().unwrap().is_token(expected_token));
         }
     }
-    // test for block comments /* nested /* comments */ are ignored *
+
     #[test]
     fn test_block_comments() {
         let mut lexer = Lexer::new(
@@ -953,6 +953,12 @@ mod tests {
                 .unwrap()
                 .is_token(Token::Identifier("x".to_string())),
         );
+        assert!(lexer.next_token().unwrap().is_token(Token::EOF));
+    }
+    
+    #[test] 
+    fn test_unterminated_block_comment() {
+        let mut lexer = Lexer::new("/* this is an unterminated comment ");
         assert!(lexer.next_token().unwrap().is_token(Token::EOF));
     }
 }

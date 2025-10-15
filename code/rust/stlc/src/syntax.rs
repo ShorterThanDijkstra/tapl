@@ -256,7 +256,7 @@ impl DeBruijnExpr {
     pub fn from_expr(expr: Expr) -> DeBruijnExpr {
         Self::from_expr_help(expr, vec![])
     }
-    fn to_expr(&self) -> Option<Expr> {
+    pub fn to_expr(&self) -> Option<Expr> {
         match self {
             DeBruijnExpr::Var { index, ctx } => {
                 let len = ctx.len();

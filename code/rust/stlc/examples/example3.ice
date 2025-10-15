@@ -11,4 +11,3 @@ def three : (t -> t) -> t -> t = \f : t -> t => \x : t => f (f (f x))
 def f : Bool -> Bool = \b : Bool => if b then False else True
 
 f True
---f two
